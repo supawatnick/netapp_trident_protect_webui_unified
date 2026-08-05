@@ -1,0 +1,21 @@
+{% extends "settings_base.html" %}
+{% block settings_content %}
+<div class="card">
+  <h2>Welcome</h2>
+  <p>Use the tabs above to manage different settings sections:</p>
+
+  <h3>Clusters</h3>
+  <p>Manage Kubernetes cluster profiles. Each profile has an API URL and credentials. Switch between clusters to manage their Trident Protect resources.</p>
+
+  <h3>AppVaults</h3>
+  <p>Manage object storage targets (AppVaults) used by Trident Protect to store backups and snapshots. Supports ONTAP S3, AWS S3, Azure Blob, GCP GCS, and StorageGrid S3.</p>
+
+  <h3>Quick links</h3>
+  <ul>
+    <li><a href="/">Dashboard</a> — Overview of all protected apps</li>
+    <li><a href="/backups">Backups</a> — List and trigger backups</li>
+    <li><a href="/restore">Restore</a> — Restore backups/snapshots to a namespace</li>
+    <li><a href="/settings/appvaults">AppVaults</a> — Manage object storage</li>
+  </ul>
+</div>
+{% endblock %}

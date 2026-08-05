@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Settings</h1>
+  <div class="subtitle">Cluster profiles, AppVaults, and authentication</div>
+</div>
+
+<div class="settings-tabs">
+  <a href="/settings" class="{% if request.path == '/settings' %}active{% endif %}">Overview</a>
+  <a href="/settings/clusters" class="{% if '/clusters' in request.path %}active{% endif %}">Clusters</a>
+  <a href="/settings/appvaults" class="{% if '/appvaults' in request.path %}active{% endif %}">AppVaults</a>
+  {% if tp_user and tp_user.role == 'admin' %}
+  <a href="/settings/credentials" class="{% if '/credentials' in request.path %}active{% endif %}">Credentials</a>
+  {% endif %}
+</div>
+
+{% block settings_content %}{% endblock %}
+{% endblock %}

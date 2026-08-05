@@ -1,0 +1,16 @@
+apiVersion: protect.trident.netapp.io/v1
+kind: Schedule
+metadata:
+  name: nginx-protect3-schedule
+  namespace: trident-protect-3
+spec:
+  appVaultRef: ontap-s3-appvault
+  applicationRef: nginx-protect3-app
+  backupReclaimPolicy: Retain
+  backupRetention: "24"
+  dataMover: Kopia
+  enabled: true
+  granularity: Hourly
+  minute: "0"
+  snapshotReclaimPolicy: Delete
+  snapshotRetention: "24"

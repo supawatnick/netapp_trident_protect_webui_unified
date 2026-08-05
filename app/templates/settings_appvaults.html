@@ -1,0 +1,134 @@
+{% extends "settings_base.html" %}
+{% block settings_content %}
+<div class="card">
+  <div class="between mb-1">
+    <h2>AppVaults</h2>
+    {% if tp_user and tp_user.role == 'admin' %}
+    <button class="btn small" onclick="showAddAppVaultForm()">+ Add AppVault</button>
+    {% endif %}
+  </div>
+  <p class="text-muted">AppVaults are object storage targets where Trident Protect stores backups and snapshots.</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Namespace</th>
+          <th>Provider</th>
+          <th>Bucket</th>
+          <th>State</th>
+          <th>Error</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="appvaults-tbody">
+        <tr><td colspan="7" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add AppVault Form -->
+<div id="appvault-form" style="display:none;" class="card">
+  <h2 id="av-form-title">Add AppVault</h2>
+  <div class="form-row">
+    <label><span>Name</span><input id="av-name" placeholder="my-appvault" /></label>
+    <label><span>Namespace</span><input id="av-namespace" value="trident-protect" /></label>
+    <label><span>Provider</span>
+      <select id="av-provider" onchange="updateProviderFields()">
+        <option value="OntapS3">ONTAP S3</option>
+        <option value="AWS">AWS S3</option>
+        <option value="GenericS3">Generic S3</option>
+        <option value="Azure">Azure Blob</option>
+        <option value="GCP">Google Cloud Storage</option>
+        <option value="StorageGridS3">StorageGrid S3</option>
+      </select>
+    </label>
+  </div>
+  <div class="form-row">
+    <label><span>S3 Endpoint</span><input id="av-endpoint" placeholder="https://s3.example.com" /></label>
+    <label><span>Bucket Name</span><input id="av-bucket" placeholder="trident-protect-bucket" /></label>
+  </div>
+  <div class="form-row">
+    <label><span>Skip TLS Verify</span>
+      <select id="av-skip-cert">
+        <option value="true">Yes (self-signed)</option>
+        <option value="false">No</option>
+      </select>
+    </label>
+  </div>
+  <h3>Credentials</h3>
+  <div class="form-row">
+    <label><span>Access Key ID</span><input id="av-access-key" placeholder="AKIA..." /></label>
+    <label><span>Secret Access Key</span><input id="av-secret-key" type="password" placeholder="•••" /></label>
+  </div>
+  <div class="form-row">
+    <button class="btn" onclick="saveAppVault()">Save AppVault</button>
+    <button class="btn secondary" onclick="hideAppVaultForm()">Cancel</button>
+  </div>
+</div>
+
+<!-- View AppVault Modal -->
+<div id="view-appvault-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideViewAppVaultModal()">
+  <div class="modal" style="max-width:800px;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
+    <div class="between">
+      <h3>AppVault: <span id="vav-name">—</span></h3>
+      <button class="btn secondary small" onclick="hideViewAppVaultModal()">Close</button>
+    </div>
+
+    <h4 style="margin-top:16px;">Metadata</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Namespace</b></td><td id="vav-namespace">—</td></tr>
+        <tr><td><b>Created</b></td><td id="vav-created">—</td></tr>
+        <tr><td><b>UID</b></td><td id="vav-uid">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Spec</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Provider</b></td><td id="vav-provider">—</td></tr>
+        <tr><td><b>Endpoint</b></td><td id="vav-endpoint">—</td></tr>
+        <tr><td><b>Bucket</b></td><td id="vav-bucket">—</td></tr>
+        <tr><td><b>Skip TLS Verify</b></td><td id="vav-skipcert">—</td></tr>
+        <tr><td><b>Secret Ref</b></td><td id="vav-secret">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Status</h4>
+    <table>
+      <tbody>
+        <tr><td><b>State</b></td><td id="vav-state">—</td></tr>
+        <tr><td><b>UID</b></td><td id="vav-status-uid">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Conditions</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="vav-conditions-body">
+          <tr><td colspan="4" class="empty">No conditions</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+      Raw YAML
+      <button class="btn secondary small" onclick="copyAppVaultYAML()">Copy</button>
+    </h4>
+    <pre id="vav-yaml" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);"></pre>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/appvaults.js"></script>
+{% endblock %}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Trident Protect Web UI
+Documentation=https://github.com/NetApp/trident
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trident-protect-webui
+ExecStart=/opt/trident-protect-webui/.venv/bin/python3 -m app.main
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trident-protect-webui
+
+Environment=PYTHONUNBUFFERED=1
+
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

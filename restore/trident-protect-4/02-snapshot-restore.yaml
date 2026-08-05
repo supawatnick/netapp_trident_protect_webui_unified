@@ -1,0 +1,13 @@
+apiVersion: protect.trident.netapp.io/v1
+kind: SnapshotRestore
+metadata:
+  name: snapshot-restore-protect-4
+  namespace: trident-protect-4-restore-snap
+spec:
+  appArchivePath: centos-vm-app_59293da8-a8cb-4f68-8cc6-34ab664fc0ff/snapshots/20260722160000_custom-a9c26-20260722160000_4ba6f552-6b1e-458b-979d-396175313d65
+  appVaultRef: ontap-s3-appvault
+  snapshotName: custom-a9c26-20260722160000
+  destinationApplicationName: centos-vm-app-snap-restored
+  namespaceMapping:
+    - source: trident-protect-4
+      destination: trident-protect-4-restore-snap

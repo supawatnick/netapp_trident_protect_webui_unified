@@ -1,0 +1,477 @@
+{% extends "base.html" %}
+{% block title %}Snapshots{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="between">
+    <div>
+      <h1>Snapshots</h1>
+      <div class="subtitle">All snapshot CRs (Kopia + CBS)</div>
+    </div>
+    {% if tp_user and tp_user.role == 'admin' %}
+    <button class="btn small" onclick="showAddSnapshotModal()">+ Add Snapshot</button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="filters">
+    <label><span>Namespace</span>
+      <select id="filter-ns">
+        <option value="">All namespaces</option>
+      </select>
+    </label>
+    <label><span>Search</span><input id="filter-q" placeholder="name…" /></label>
+    <button class="btn small" onclick="render()">Apply</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Namespace</th>
+          <th>Name</th>
+          <th>Application</th>
+          <th>Schedule Source</th>
+          <th>Reclaim Policy</th>
+          <th>State</th>
+          <th>Created</th>
+          <th>Age</th>
+          <th>Error</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="snapshots-tbody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add Snapshot Modal (Form + YAML) -->
+<div id="add-snapshot-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideAddSnapshotModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:700px;">
+    <h3>Add Snapshot</h3>
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
+      <button class="form-tab active" id="add-snapshot-tab-form" onclick="switchSnapshotTab('form')">Form</button>
+      <button class="form-tab" id="add-snapshot-tab-yaml" onclick="switchSnapshotTab('yaml')">YAML</button>
+    </div>
+
+    <!-- FORM TAB -->
+    <div id="add-snapshot-form-tab">
+      <div class="form-row">
+        <label><span>Name <span class="text-muted">(optional, auto-generated)</span></span>
+          <input id="add-snapshot-name" placeholder="snap-2026-07-25-..." />
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Namespace</span><select id="add-snapshot-ns" onchange="loadSnapshotApps()"></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>Application</span><select id="add-snapshot-app"></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>AppVault</span><select id="add-snapshot-vault"></select></label>
+      </div>
+    </div>
+
+    <!-- YAML TAB -->
+    <div id="add-snapshot-yaml-tab" style="display:none">
+      <p class="text-muted">Edit the Snapshot YAML manifest. Will be applied to the active cluster context.</p>
+      <textarea id="snapshot-yaml" rows="14" style="font-family:var(--font-mono);font-size:13px;width:100%;"></textarea>
+    </div>
+
+    <div id="add-snapshot-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideAddSnapshotModal()">Cancel</button>
+      <button class="btn secondary" onclick="validateSnapshotYAML()">Validate</button>
+      <button class="btn" onclick="applySnapshotYAML()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- View Snapshot Modal -->
+<div id="view-snapshot-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideViewSnapshotModal()">
+  <div class="modal" style="max-width:800px;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
+    <div class="between">
+      <h3>Snapshot: <span id="vs-name">—</span></h3>
+      <button class="btn secondary small" onclick="hideViewSnapshotModal()">Close</button>
+    </div>
+
+    <h4 style="margin-top:16px;">Metadata</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Namespace</b></td><td id="vs-namespace">—</td></tr>
+        <tr><td><b>Created</b></td><td id="vs-created">—</td></tr>
+        <tr><td><b>Labels</b></td><td id="vs-labels">—</td></tr>
+        <tr><td><b>UID</b></td><td id="vs-uid">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Spec</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Application</b></td><td id="vs-appref">—</td></tr>
+        <tr><td><b>AppVault</b></td><td id="vs-appvault">—</td></tr>
+        <tr><td><b>Reclaim Policy</b></td><td id="vs-reclaim">—</td></tr>
+        <tr><td><b>Cleanup Snapshot</b></td><td id="vs-cleanup">—</td></tr>
+        <tr><td><b>Replicate Reclaim</b></td><td id="vs-replicate-reclaim">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Status</h4>
+    <table>
+      <tbody>
+        <tr><td><b>State</b></td><td id="vs-state">—</td></tr>
+        <tr><td><b>App Archive Path</b></td><td id="vs-archive-path" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">—</td></tr>
+        <tr><td><b>Completion Time</b></td><td id="vs-completion">—</td></tr>
+        <tr><td><b>Restore Size</b></td><td id="vs-restore-size">—</td></tr>
+        <tr><td><b>Error</b></td><td id="vs-error">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Conditions</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="vs-conditions-body">
+          <tr><td colspan="4" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+      Raw YAML
+      <button class="btn secondary small" onclick="copySnapshotYAML()">Copy</button>
+    </h4>
+    <pre id="vs-yaml" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);"></pre>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let snapshots = [];
+async function loadNamespaces() {
+  try {
+    const res = await fetch('/api/namespaces');
+    const data = await res.json();
+    const items = (data.items || []).sort((a, b) => a.name.localeCompare(b.name));
+    const select = document.getElementById('filter-ns');
+    for (const ns of items) {
+      const opt = document.createElement('option');
+      opt.value = ns.name;
+      opt.textContent = ns.name;
+      select.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('Failed to load namespaces:', e);
+  }
+}
+
+async function loadSnapshots() {
+  const res = await fetch('/api/snapshots');
+  const data = await res.json();
+  snapshots = data.items || [];
+  render();
+}
+function render() {
+  const nsF = document.getElementById('filter-ns').value.toLowerCase();
+  const q = document.getElementById('filter-q').value.toLowerCase();
+  const rows = snapshots.filter(s =>
+    (!nsF || s.namespace === nsF) &&
+    (!q || s.name.toLowerCase().includes(q))
+  );
+  document.getElementById('snapshots-tbody').innerHTML = rows.map(s => `
+    <tr>
+      <td>${escapeHtml(s.namespace)}</td>
+      <td><b>${escapeHtml(s.name)}</b></td>
+      <td>${escapeHtml(s.applicationRef || '—')}</td>
+      <td>${escapeHtml(s.scheduleSource || 'on-demand')}</td>
+      <td>${escapeHtml(s.reclaimPolicy || '—')}</td>
+      <td>${stateBadge(s.state)}</td>
+      <td>${escapeHtml(s.created)}</td>
+      <td>${escapeHtml(s.age)}</td>
+      <td class="text-muted">${escapeHtml(s.error || '—')}</td>
+      <td>
+        <button class="btn small secondary" onclick="viewSnapshot('${escapeHtml(s.namespace)}','${escapeHtml(s.name)}')">View</button>
+        ${isAdmin() ? `<button class="btn small danger" onclick="deleteSnap('${escapeHtml(s.namespace)}','${escapeHtml(s.name)}')">Del</button>` : ''}
+      </td>
+    </tr>
+  `).join('') || `<tr><td colspan="10" class="empty">No matches</td></tr>`;
+}
+
+// ---- Delete ----
+async function deleteSnap(ns, name) {
+  if (!tpRequireAdmin()) return;
+  if (!confirm(`Delete snapshot ${ns}/${name}?`)) return;
+  const res = await fetch(`/api/snapshot/${ns}/${name}`, {method:'DELETE'});
+  const r = await res.json();
+  toast(r.ok ? 'Deleted' : 'Failed: '+r.message, r.ok ? 'success' : 'error');
+  loadSnapshots();
+}
+
+// ---- Add Snapshot modal ----
+const DEFAULT_SNAPSHOT_YAML = `apiVersion: protect.trident.netapp.io/v1
+kind: Snapshot
+metadata:
+  name: my-snapshot
+  namespace: trident-protect-1
+spec:
+  applicationRef: my-app
+  appVaultRef: ontap-s3-appvault
+  reclaimPolicy: Delete`;
+
+function switchSnapshotTab(tab) {
+  const isForm = tab === 'form';
+  document.getElementById('add-snapshot-form-tab').style.display = isForm ? '' : 'none';
+  document.getElementById('add-snapshot-yaml-tab').style.display = isForm ? 'none' : '';
+  document.getElementById('add-snapshot-tab-form').classList.toggle('active', isForm);
+  document.getElementById('add-snapshot-tab-yaml').classList.toggle('active', !isForm);
+  if (!isForm) {
+    document.getElementById('snapshot-yaml').value = buildSnapshotYamlFromForm();
+  }
+}
+
+function buildSnapshotYamlFromForm() {
+  const name = document.getElementById('add-snapshot-name').value.trim()
+    || `snap-${new Date().toISOString().replace(/[:.]/g,'').slice(0,15).toLowerCase()}`;
+  const ns = document.getElementById('add-snapshot-ns').value || 'trident-protect';
+  const app = document.getElementById('add-snapshot-app').value || 'my-app';
+  const vault = document.getElementById('add-snapshot-vault').value || 'ontap-s3-appvault';
+  return `apiVersion: protect.trident.netapp.io/v1
+kind: Snapshot
+metadata:
+  name: ${name}
+  namespace: ${ns}
+spec:
+  applicationRef: ${app}
+  appVaultRef: ${vault}
+  reclaimPolicy: Delete`;
+}
+
+async function loadSnapshotApps() {
+  const ns = document.getElementById('add-snapshot-ns').value;
+  const sel = document.getElementById('add-snapshot-app');
+  if (!ns) { sel.innerHTML = '<option value="">—</option>'; return; }
+  try {
+    const res = await fetch(`/api/applications?namespace=${encodeURIComponent(ns)}`);
+    const data = await res.json();
+    const apps = data.items || [];
+    sel.innerHTML = apps.length
+      ? apps.map(a => `<option value="${a.name}">${a.name}</option>`).join('')
+      : '<option value="">No apps in this ns</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function loadSnapshotAppVaults() {
+  const sel = document.getElementById('add-snapshot-vault');
+  try {
+    const res = await fetch('/api/appvaults');
+    const data = await res.json();
+    const vaults = data.items || [];
+    sel.innerHTML = vaults.length
+      ? vaults.map(v => `<option value="${v.name}">${v.name} (${v.namespace})</option>`).join('')
+      : '<option value="">No appvaults found</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function showAddSnapshotModal() {
+  document.getElementById('add-snapshot-msg').textContent = '';
+  document.getElementById('add-snapshot-msg').style.color = '';
+  document.getElementById('add-snapshot-name').value = '';
+  await populateNsDropdown('add-snapshot-ns');
+  await loadSnapshotApps();
+  await loadSnapshotAppVaults();
+  document.getElementById('snapshot-yaml').value = DEFAULT_SNAPSHOT_YAML;
+  switchSnapshotTab('form');
+  document.getElementById('add-snapshot-modal').style.display = 'flex';
+}
+function hideAddSnapshotModal() {
+  document.getElementById('add-snapshot-modal').style.display = 'none';
+}
+function getSnapshotYaml() {
+  const formTab = document.getElementById('add-snapshot-form-tab');
+  if (formTab.style.display !== 'none') {
+    return buildSnapshotYamlFromForm();
+  }
+  return document.getElementById('snapshot-yaml').value.trim();
+}
+async function validateSnapshotYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getSnapshotYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  try {
+    const res = await fetch('/api/snapshot/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); }
+}
+async function applySnapshotYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getSnapshotYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  let v;
+  try {
+    const vRes = await fetch('/api/snapshot/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    v = await vRes.json();
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); return; }
+  if (!v.ok) { showAddMsg('Invalid: ' + v.message, 'error'); return; }
+  if (!confirm(v.message + '\n\nApply now?')) return;
+  try {
+    const res = await fetch('/api/snapshot/apply', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) {
+      setTimeout(() => { hideAddSnapshotModal(); loadSnapshots(); }, 1000);
+    }
+  } catch (e) { showAddMsg('Apply failed: ' + e.message, 'error'); }
+}
+function showAddMsg(text, kind) {
+  const el = document.getElementById('add-snapshot-msg');
+  el.textContent = text;
+  el.style.color = kind === 'error' ? 'var(--color-error)' : kind === 'success' ? 'var(--color-success)' : 'var(--color-text-muted, #666)';
+  el.style.fontSize = '13px';
+}
+
+// ---- View Snapshot modal ----
+async function viewSnapshot(ns, name) {
+  try {
+    const [jsonRes, yamlRes] = await Promise.all([
+      fetch(`/api/snapshot/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
+      fetch(`/api/snapshot/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
+    ]);
+    if (!jsonRes.ok) throw new Error(`HTTP ${jsonRes.status}`);
+    const s = await jsonRes.json();
+    const yamlText = await yamlRes.text();
+    renderViewSnapshotModal(s, yamlText);
+    document.getElementById('view-snapshot-modal').style.display = 'flex';
+  } catch (e) {
+    toast('Failed to load: ' + e.message, 'error');
+  }
+}
+
+function renderViewSnapshotModal(s, yamlText) {
+  const md = s.metadata || {};
+  const sp = s.spec || {};
+  const st = s.status || {};
+  const cn = md.creationTimestamp || '';
+
+  document.getElementById('vs-name').textContent = md.name || '—';
+  document.getElementById('vs-namespace').textContent = md.namespace || '—';
+  document.getElementById('vs-created').textContent = cn ? `${formatTime(cn)} (${formatAge(cn)})` : '—';
+  document.getElementById('vs-uid').textContent = md.uid || '—';
+
+  const labels = md.labels || {};
+  document.getElementById('vs-labels').textContent = Object.keys(labels).length
+    ? Object.entries(labels).map(([k,v]) => `${k}=${v}`).join(', ')
+    : '—';
+
+  document.getElementById('vs-appref').textContent = sp.applicationRef || '—';
+  document.getElementById('vs-appvault').textContent = sp.appVaultRef || '—';
+  document.getElementById('vs-reclaim').textContent = sp.reclaimPolicy || '—';
+  document.getElementById('vs-cleanup').textContent = sp.cleanupSnapshot != null ? (sp.cleanupSnapshot ? 'Yes' : 'No') : '—';
+  document.getElementById('vs-replicate-reclaim').textContent = sp.replicateSnapshotReclaimPolicy || '—';
+
+  document.getElementById('vs-state').innerHTML = stateBadge(st.state || 'Unknown');
+  document.getElementById('vs-archive-path').textContent = st.appArchivePath || '—';
+  document.getElementById('vs-completion').textContent = st.completionTimestamp
+    ? `${formatTime(st.completionTimestamp)} (${formatAge(st.completionTimestamp)})`
+    : '—';
+  document.getElementById('vs-restore-size').textContent = st.restoreSize != null ? fmtBytes(st.restoreSize) : '—';
+  document.getElementById('vs-error').textContent = st.error || '—';
+  document.getElementById('vs-error').style.color = st.error ? 'var(--color-error)' : '';
+
+  const conds = st.conditions || [];
+  document.getElementById('vs-conditions-body').innerHTML = conds.length === 0
+    ? '<tr><td colspan="4" class="empty">No conditions</td></tr>'
+    : conds.map(c => `
+        <tr>
+          <td>${escapeHtml(c.type || '—')}</td>
+          <td>${escapeHtml(c.status || '—')}</td>
+          <td>${escapeHtml(c.reason || '—')}</td>
+          <td>${escapeHtml(c.message || '—')}</td>
+        </tr>
+      `).join('');
+
+  document.getElementById('vs-yaml').textContent = yamlText;
+}
+
+function hideViewSnapshotModal() {
+  document.getElementById('view-snapshot-modal').style.display = 'none';
+}
+
+async function copySnapshotYAML() {
+  const text = document.getElementById('vs-yaml').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied to clipboard', 'success');
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('Copied (fallback)', 'success'); }
+    catch (_) { toast('Copy failed', 'error'); }
+    document.body.removeChild(ta);
+  }
+}
+
+// ---- Helpers ----
+function formatTime(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toISOString().replace('T', ' ').slice(0, 19);
+  } catch (_) { return ts; }
+}
+
+function formatAge(ts) {
+  try {
+    const d = new Date(ts);
+    const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec/60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec/3600) + 'h ago';
+    return Math.floor(sec/86400) + 'd ago';
+  } catch (_) { return ''; }
+}
+
+function fmtBytes(b) {
+  if (b == null) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  let s = Number(b);
+  for (const x of u) { if (s < 1024) return s.toFixed(1)+' '+x; s /= 1024; }
+  return s.toFixed(1)+' PB';
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+document.getElementById('filter-ns').addEventListener('change', render);
+document.getElementById('filter-q').addEventListener('input', render);
+loadNamespaces();
+loadSnapshots();
+</script>
+{% endblock %}

@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="between">
+    <div>
+      <h1>Logs</h1>
+      <div class="subtitle">Audit trail of actions performed through the UI</div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
+        <input type="checkbox" id="auto-refresh" /> Auto-refresh
+      </label>
+      <button class="btn small secondary" onclick="load()">Refresh</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="filters">
+    <label><span>User</span>
+      <select id="filter-user">
+        <option value="">All users</option>
+      </select>
+    </label>
+    <label><span>Action</span>
+      <select id="filter-action">
+        <option value="">All actions</option>
+        <option value="create">create</option>
+        <option value="delete">delete</option>
+        <option value="update">update</option>
+        <option value="enable">enable</option>
+        <option value="disable">disable</option>
+        <option value="trigger">trigger</option>
+        <option value="save">save</option>
+        <option value="switch">switch</option>
+        <option value="login">login</option>
+        <option value="logout">logout</option>
+        <option value="failover">failover</option>
+        <option value="resync">resync</option>
+        <option value="bootstrap_snapshot">bootstrap_snapshot</option>
+      </select>
+    </label>
+    <label><span>Result</span>
+      <select id="filter-result">
+        <option value="">All</option>
+        <option value="ok">Success</option>
+        <option value="fail">Failed</option>
+      </select>
+    </label>
+    <label><span>Search</span><input id="filter-q" placeholder="name, namespace, detail…" /></label>
+    <label><span>Page size</span>
+      <select id="filter-limit">
+        <option>50</option>
+        <option selected>100</option>
+        <option>200</option>
+        <option>500</option>
+      </select>
+    </label>
+    <button class="btn small" onclick="applyFilters()">Apply</button>
+    <button class="btn small secondary" onclick="resetFilters()">Reset</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:160px;">Time (UTC)</th>
+          <th>User</th>
+          <th>Action</th>
+          <th>Kind</th>
+          <th>Namespace</th>
+          <th>Name</th>
+          <th>Result</th>
+          <th>Detail</th>
+          <th style="width:120px;">IP</th>
+        </tr>
+      </thead>
+      <tbody id="logs-tbody"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 4px; font-size:12px; opacity:0.85;">
+    <div id="logs-summary">—</div>
+    <div style="display:flex; gap:6px;">
+      <button class="btn small secondary" id="btn-prev" onclick="prevPage()">‹ Prev</button>
+      <button class="btn small secondary" id="btn-next" onclick="nextPage()">Next ›</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let _offset = 0;
+let _limit = 100;
+let _total = 0;
+let _autoTimer = null;
+let _usersPopulated = false;
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function fmtTs(ts) {
+  if (!ts) return '';
+  // Stored as ISO UTC; show as-is (server time) plus a local hint.
+  try {
+    const d = new Date(ts + 'Z');
+    if (isNaN(d.getTime())) return escapeHtml(ts);
+    return escapeHtml(ts) + ' <span style="opacity:0.6;font-size:10px;">UTC</span>';
+  } catch (e) { return escapeHtml(ts); }
+}
+
+function userCell(rec) {
+  const u = escapeHtml(rec.user || '-');
+  const role = escapeHtml(rec.role || '-');
+  const src = escapeHtml(rec.source || '-');
+  const roleBg = role === 'admin' ? '#008000' : '#666';
+  return `<div><b>${u}</b> <span class="badge" style="margin-left:4px;background:${roleBg};color:#fff;border:none;">${role}</span></div>` +
+         `<div style="opacity:0.7;font-size:11px;">${src}</div>`;
+}
+
+function resultCell(rec) {
+  if (rec.ok) {
+    return '<span class="badge success" style="background:rgba(0,128,0,0.15);color:#006400;">OK</span>';
+  }
+  return '<span class="badge error" style="background:rgba(255,0,0,0.12);color:#b00020;">FAIL</span>';
+}
+
+function readFilters() {
+  return {
+    user: document.getElementById('filter-user').value || '',
+    action: document.getElementById('filter-action').value || '',
+    result: document.getElementById('filter-result').value || '',
+    q: document.getElementById('filter-q').value || '',
+    limit: _limit,
+    offset: _offset,
+  };
+}
+
+function buildQuery(f) {
+  const p = new URLSearchParams();
+  if (f.user) p.set('user', f.user);
+  if (f.action) p.set('action', f.action);
+  if (f.result) p.set('result', f.result);
+  if (f.q) p.set('q', f.q);
+  p.set('limit', f.limit);
+  p.set('offset', f.offset);
+  return p.toString();
+}
+
+async function load() {
+  const tbody = document.getElementById('logs-tbody');
+  tbody.innerHTML = '<tr><td colspan="9" class="empty">Loading…</td></tr>';
+  try {
+    const res = await tpFetch('/api/audit/logs?' + buildQuery(readFilters()));
+    const data = await res.json();
+    if (!data.ok) throw new Error('api error');
+    _total = data.total || 0;
+    if (!_usersPopulated && data.users && data.users.length) {
+      const sel = document.getElementById('filter-user');
+      data.users.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u;
+        opt.textContent = u;
+        sel.appendChild(opt);
+      });
+      _usersPopulated = true;
+    }
+    const items = data.items || [];
+    if (!items.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="empty">No log entries match the current filters.</td></tr>';
+    } else {
+      tbody.innerHTML = items.map(r => {
+        return `<tr>
+          <td style="font-family:monospace;font-size:11px;">${fmtTs(r.ts)}</td>
+          <td>${userCell(r)}</td>
+          <td><code>${escapeHtml(r.action)}</code></td>
+          <td>${escapeHtml(r.kind)}</td>
+          <td>${escapeHtml(r.namespace)}</td>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${resultCell(r)}</td>
+          <td style="max-width:420px; word-break:break-word;">${escapeHtml(r.detail || '')}</td>
+          <td style="font-family:monospace;font-size:11px;">${escapeHtml(r.ip || '')}</td>
+        </tr>`;
+      }).join('');
+    }
+    const from = _total === 0 ? 0 : (_offset + 1);
+    const to = Math.min(_offset + items.length, _total);
+    document.getElementById('logs-summary').textContent =
+      data.enabled === false
+        ? 'Logging is disabled (config: logs.enabled=false).'
+        : `Showing ${from}–${to} of ${_total} entries`;
+    document.getElementById('btn-prev').disabled = _offset <= 0;
+    document.getElementById('btn-next').disabled = (_offset + items.length) >= _total;
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">Failed to load logs.</td></tr>';
+  }
+}
+
+function applyFilters() {
+  _offset = 0;
+  _limit = parseInt(document.getElementById('filter-limit').value, 10) || 100;
+  load();
+}
+
+function resetFilters() {
+  document.getElementById('filter-user').value = '';
+  document.getElementById('filter-action').value = '';
+  document.getElementById('filter-result').value = '';
+  document.getElementById('filter-q').value = '';
+  document.getElementById('filter-limit').value = '100';
+  _usersPopulated = false;
+  // Clear user dropdown except the first option
+  const sel = document.getElementById('filter-user');
+  while (sel.options.length > 1) sel.remove(1);
+  applyFilters();
+}
+
+function prevPage() {
+  _offset = Math.max(0, _offset - _limit);
+  load();
+}
+function nextPage() {
+  if ((_offset + _limit) < _total) {
+    _offset += _limit;
+    load();
+  }
+}
+
+document.getElementById('filter-q').addEventListener('keydown', e => {
+  if (e.key === 'Enter') applyFilters();
+});
+document.getElementById('auto-refresh').addEventListener('change', e => {
+  if (e.target.checked) {
+    _autoTimer = setInterval(load, 5000);
+  } else if (_autoTimer) {
+    clearInterval(_autoTimer);
+    _autoTimer = null;
+  }
+});
+
+load();
+</script>
+{% endblock %}

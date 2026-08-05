@@ -1,0 +1,16 @@
+apiVersion: protect.trident.netapp.io/v1
+kind: BackupRestore
+metadata:
+  name: restore-protect-2
+  namespace: trident-protect-2-restore
+spec:
+  appArchivePath: stateful-protect-app_47e795f1-6a56-4847-801a-eb13cb286ba7/backups/hourly-e9b9f-20260722100000_0da8f889-0609-4cfc-8bca-e0d4c0caee37
+  appVaultRef: ontap-s3-appvault
+  backupName: hourly-e9b9f-20260722100000
+  destinationApplicationName: stateful-protect-app-restored
+  namespaceMapping:
+    - source: trident-protect-2
+      destination: trident-protect-2-restore
+  storageClassMapping:
+    - source: a400-nfs
+      destination: a400-nfs-v2

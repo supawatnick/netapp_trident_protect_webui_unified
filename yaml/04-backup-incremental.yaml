@@ -1,0 +1,13 @@
+apiVersion: protect.trident.netapp.io/v1
+kind: Backup
+metadata:
+  name: nginx-protect3-backup-2
+  namespace: trident-protect-3
+  labels:
+    cluster-name: nail-ocp
+spec:
+  appVaultRef: ontap-s3-appvault
+  applicationRef: nginx-protect3-app
+  cleanupSnapshot: true
+  dataMover: Kopia
+  reclaimPolicy: Retain

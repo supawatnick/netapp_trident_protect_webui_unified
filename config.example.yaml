@@ -1,0 +1,74 @@
+app:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+  # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+  secret_key: "REPLACE-WITH-RANDOM-SECRET-KEY"
+
+cli:
+  # Path to the tridentprotect-ctl binary (works for both Kubernetes and OpenShift clusters)
+  path: "bin/tridentprotect-ctl"
+
+refresh:
+  interval_sec: 30
+
+appvault:
+  # Default AppVault (object storage target for backups/snapshots)
+  default: "ontap-s3-appvault"
+  namespace: "trident-protect"
+
+clusters:
+  # Name of the currently active profile (must match a key in profiles below)
+  active: ""
+
+  profiles: {}
+  # Example structure:
+  # active: "clus1"
+  # profiles:
+  #   clus1:
+  #     api_url: "https://10.10.10.41:6443"
+  #     appvault: "ontap-s3-appvault"
+  #     appvault_namespace: "trident-protect"
+  #     insecure_skip_tls: true
+  #     description: "Cluster 1"
+  #     kubeconfig_context: "clus1"        # optional: context name in ~/.kube/config
+  #     token: "<bearer-token>"            # optional: stored after first Login & Switch
+  #   clus2:
+  #     api_url: "https://10.10.4.21:6443"
+  #     appvault: "ontap-s3-appvault"
+  #     appvault_namespace: "trident-protect"
+  #     insecure_skip_tls: true
+  #     description: "Cluster 2"
+  #     kubeconfig_context: "clus2"
+
+# --- Audit log (who did what in the UI) ---
+# Every mutating action performed through the UI Dashboard is appended to
+# logs/audit.log as one JSON object per line (gitignored). View via the
+# "Logs" menu (admin only). Blocked attempts and login/logout are also
+# recorded.
+logs:
+  enabled: true        # set false to disable writing
+  max_rows: 10000      # keep at most this many lines (0 = unlimited)
+
+# --- Dashboard login (separate from Kubernetes cluster profile login) ---
+# Local users are stored in auth_users.json (project root, gitignored).
+# LDAP is optional. If enabled, LDAP users are authenticated by bind.
+# Role for LDAP users is determined by admin_group_dns membership.
+auth:
+  enabled: true
+  default_role: "readonly"   # fallback role if LDAP user does not match any admin group
+  ldap:
+    enabled: false
+    server: "ldap.example.com"        # host or ldap://host:389
+    port: 389                          # ignored if server already contains scheme/port
+    use_tls: false                     # true for ldaps:// or STARTTLS
+    skip_cert_verify: true
+    bind_dn: "cn=readonly-svc,ou=service,dc=example,dc=com"
+    bind_password: ""
+    base_dn: "ou=people,dc=example,dc=com"
+    user_filter: "(&(objectClass=person)(sAMAccountName={username}))"
+    username_attribute: "sAMAccountName"  # attribute used to populate {username}
+    netbios_domain: ""                  # e.g. "NTAPTH" — canonicalizes LDAP record key
+                                        # (DOMAIN\user and user@domain map to one record)
+    admin_group_dns:                   # member of any → admin role
+      - "cn=tp-admins,ou=groups,dc=example,dc=com"

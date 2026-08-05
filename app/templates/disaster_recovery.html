@@ -1,0 +1,1448 @@
+{% extends "base.html" %}
+{% block title %}Disaster Recovery{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="between">
+    <div>
+      <h1>Disaster Recovery</h1>
+      <div class="subtitle">Manage cross-cluster AppMirrorRelationships for disaster recovery</div>
+    </div>
+    <div class="flex">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+        <span style="color:var(--color-text-muted);">Profile</span>
+        <select id="dr-active-profile" style="padding:4px 8px;font-size:13px;min-width:120px;"></select>
+      </label>
+      <button class="btn small warning" id="dr-switch-btn" disabled onclick="drSwitchProfile()">Switch</button>
+      <button class="btn small secondary" onclick="loadDROverview()">Refresh</button>
+      {% if tp_user and tp_user.role == 'admin' %}
+      <button class="btn small" onclick="showCreateAMRModal()">+ Create Mirror</button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Active Profile Banner (NEW) -->
+<div id="dr-active-banner" class="card" style="display:none;background:#e8f4fd;border-color:var(--color-info);margin-bottom:16px;">
+  <div style="display:flex;align-items:center;gap:12px;">
+    <div style="font-size:20px;">ℹ️</div>
+    <div style="flex:1;">
+      <div style="font-weight:600;margin-bottom:4px;">DR requires active profile on DESTINATION cluster</div>
+      <div class="text-muted" style="font-size:13px;" id="dr-active-banner-text">
+        The AppMirrorRelationship CR must be created on the <b>destination</b> cluster (per NetApp docs).
+        Switch your active profile to the destination cluster first.
+      </div>
+    </div>
+    <a href="/settings/clusters" class="btn small">Go to Settings</a>
+  </div>
+</div>
+
+<!-- Cluster Status Cards -->
+<div class="stats" id="dr-cluster-stats">
+  <div class="stat"><div class="value" id="dr-cluster-1-count">—</div><div class="label" id="dr-cluster-1-label">Cluster 1</div></div>
+  <div class="stat"><div class="value" id="dr-cluster-2-count">—</div><div class="label" id="dr-cluster-2-label">Cluster 2</div></div>
+  <div class="stat success"><div class="value" id="dr-total-healthy">0</div><div class="label">Healthy Mirrors</div></div>
+  <div class="stat warning"><div class="value" id="dr-total-degraded">0</div><div class="label">Syncing / Pending</div></div>
+  <div class="stat error"><div class="value" id="dr-total-failed">0</div><div class="label">Failed Mirrors</div></div>
+</div>
+
+<!-- Mirror Relationships Table -->
+<div class="card">
+  <h2>AppMirrorRelationships</h2>
+  <div class="filters">
+    <label><span>Filter</span><input id="dr-filter-q" placeholder="name / application / cluster…" /></label>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name / NS</th>
+          <th>Source Cluster</th>
+          <th>Source NS</th>
+          <th>Source App</th>
+          <th>Source AppVault</th>
+          <th>Dest Cluster</th>
+          <th>Dest NS</th>
+          <th>Dest App</th>
+          <th>Dest AppVault</th>
+          <th>Schedule</th>
+          <th>Status</th>
+          <th>Last Transfer</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="dr-tbody"><tr><td colspan="13" class="empty">Loading...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create AMR Modal -->
+<div id="create-amr-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideCreateAMRModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:750px;">
+    <h3>Create AppMirrorRelationship</h3>
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
+      <button class="form-tab active" id="amr-tab-form" onclick="switchAMRTab('form')">Form</button>
+      <button class="form-tab" id="amr-tab-yaml" onclick="switchAMRTab('yaml')">YAML</button>
+    </div>
+
+    <!-- FORM TAB -->
+    <div id="amr-form-tab">
+      <div class="form-row">
+        <label><span>Name</span><input id="amr-name" placeholder="my-mirror" /></label>
+      </div>
+      <div class="form-row">
+        <label><span>Source Cluster <span class="text-muted">(non-active profile — auto)</span></span>
+          <input id="amr-source-cluster-display" readonly style="background:var(--color-surface);font-weight:600;" value="—" />
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Source Namespace <span class="text-muted">(select to load applications)</span></span>
+          <select id="amr-source-ns"><option value="">Loading...</option></select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Source Application <span class="text-muted">(Application CR to mirror — choose from this namespace)</span></span>
+          <select id="amr-source-app"><option value="">—</option></select>
+        </label>
+        <div id="amr-source-app-info" class="text-muted" style="font-size:12px;"></div>
+      </div>
+      <div class="form-row">
+        <label><span>Source AppVault</span>
+          <select id="amr-source-appvault"></select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Destination Cluster <span class="text-muted">(active profile — AMR created here)</span></span>
+          <input id="amr-dest-cluster-display" readonly style="background:var(--color-surface);font-weight:600;" value="—" />
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Destination Namespace</span>
+          <select id="amr-dest-ns"><option value="">Loading...</option></select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Destination AppVault</span>
+          <select id="amr-dest-appvault"></select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Snapshot Frequency</span>
+          <select id="amr-recurrence-preset" style="font-family:var(--font-mono);">
+
+            <option value="1hour" selected>Every 1 hour</option>
+            <option value="8hour">Every 8 hours</option>
+            <option value="daily">Daily</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-row">
+        <div class="text-muted" style="font-size:11px;font-family:var(--font-mono);word-break:break-all;">
+          Generated: <span id="amr-recurrence-preview">—</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <label><span>Storage Class <span class="text-muted">(required)</span></span>
+          <select id="amr-storageclass"><option value="">Loading...</option></select>
+        </label>
+      </div>
+    </div>
+
+    <!-- YAML TAB -->
+    <div id="amr-yaml-tab" style="display:none">
+      <p class="text-muted">Edit the AppMirrorRelationship YAML manifest directly.</p>
+      <textarea id="amr-yaml" rows="18" style="font-family:var(--font-mono);font-size:13px;width:100%;"></textarea>
+    </div>
+
+    <div id="amr-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideCreateAMRModal()">Cancel</button>
+      <button class="btn secondary" onclick="validateAMRYAML()">Validate</button>
+      <button class="btn" onclick="applyAMRYAML()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- View AMR Modal -->
+<div id="view-amr-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideViewAMRModal()">
+  <div class="modal" style="max-width:800px;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
+    <div class="between">
+      <h3>AppMirrorRelationship: <span id="vam-name">-</span></h3>
+      <button class="btn secondary small" onclick="hideViewAMRModal()">Close</button>
+    </div>
+
+    <h4 style="margin-top:16px;">Spec</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Source Cluster</b></td><td id="vam-source-cluster">-</td></tr>
+        <tr><td><b>Source Namespace</b></td><td id="vam-source-ns-row">-</td></tr>
+        <tr><td><b>Source AppVault</b></td><td id="vam-source-av">-</td></tr>
+        <tr><td><b>Source Application</b></td><td id="vam-source-app">-</td></tr>
+        <tr><td><b>Source Application UID</b></td><td id="vam-source-uid">-</td></tr>
+        <tr><td><b>Destination Cluster</b></td><td id="vam-dest-cluster">-</td></tr>
+        <tr><td><b>Destination AppVault</b></td><td id="vam-dest-av">-</td></tr>
+        <tr><td><b>Destination Application</b></td><td id="vam-dest-app">-</td></tr>
+        <tr><td><b>Destination Namespace</b></td><td id="vam-dest-ns">-</td></tr>
+        <tr><td><b>Desired State</b></td><td id="vam-desired-state">-</td></tr>
+        <tr><td><b>Recurrence</b></td><td id="vam-recurrence">-</td></tr>
+        <tr><td><b>Storage Class</b></td><td id="vam-storageclass">-</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Status</h4>
+    <table>
+      <tbody>
+        <tr><td><b>State</b></td><td id="vam-state">-</td></tr>
+        <tr><td><b>Last Transfer Time</b></td><td id="vam-last-transfer">-</td></tr>
+        <tr><td><b>Last Transfer Size</b></td><td id="vam-last-size">-</td></tr>
+        <tr><td><b>Error</b></td><td id="vam-error" style="color:var(--color-error);">-</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Conditions</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Type</th><th>Status</th><th>Reason</th><th>Message</th></tr>
+        </thead>
+        <tbody id="vam-conditions-body">
+          <tr><td colspan="4" class="empty">No conditions</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+      Raw YAML
+      <button class="btn secondary small" onclick="copyAMRYAML()">Copy</button>
+    </h4>
+    <pre id="vam-yaml" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);"></pre>
+  </div>
+</div>
+
+<!-- Failover Confirmation Modal -->
+<div id="failover-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideFailoverModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:500px;">
+    <h3>Confirm Failover</h3>
+    <p style="margin-bottom:12px;">You are about to promote the DR target. This will:</p>
+    <ul style="margin-bottom:16px;padding-left:20px;">
+      <li>Change <code>desiredState</code> to <b>Promoted</b></li>
+      <li>Stop replication from the source</li>
+      <li>Start the application on the destination cluster</li>
+    </ul>
+    <p class="text-muted" style="margin-bottom:12px;"><b>Note:</b> The source application is <em>not</em> stopped automatically. You must stop it manually if needed.</p>
+    <p><b>AppMirrorRelationship:</b> <span id="failover-amr-name">-</span></p>
+    <p class="text-muted mt-1">This action can be reversed with Resync.</p>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideFailoverModal()">Cancel</button>
+      <button class="btn danger" onclick="confirmFailover()">Failover</button>
+    </div>
+  </div>
+</div>
+
+<!-- Resync Confirmation Modal -->
+<div id="resync-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideResyncModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:500px;">
+    <h3>Confirm Resync</h3>
+    <p style="margin-bottom:12px;">You are about to resync the replication relationship. This will:</p>
+    <ul style="margin-bottom:16px;padding-left:20px;">
+      <li>Change <code>desiredState</code> back to <b>Established</b></li>
+      <li>Discard any changes made on the destination during failover</li>
+      <li>Re-establish replication from the original source</li>
+    </ul>
+    <p class="text-muted" style="margin-bottom:12px;"><b>Warning:</b> Data written to the destination application during failover will be <b>lost</b>.</p>
+    <p><b>AppMirrorRelationship:</b> <span id="resync-amr-name">-</span></p>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideResyncModal()">Cancel</button>
+      <button class="btn danger" onclick="confirmResync()">Resync</button>
+    </div>
+  </div>
+</div>
+
+<div id="reverse-warning-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideReverseWarningModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:560px;">
+    <h3>⚠️ Reverse (YAML) — Resources Must Be Down</h3>
+    <div style="background:#f8d7da;border:1px solid #dc3545;border-radius:6px;padding:12px 14px;margin-bottom:14px;color:#721c24;">
+      <b>Warning:</b> Resources on the destination cluster must be down (scaled to 0) before reverse replication can proceed.
+      Reverse replication will <b>OVERWRITE</b> the destination cluster's PVCs with the current promoted data.
+      Data on the destination's existing app will be replaced.
+    </div>
+    <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:13px;">
+      <b>Recommended procedure</b> (handled by the wizard below):
+      <ol style="margin:6px 0 0 16px;padding:0;">
+        <li>Verify the AMR is already failed over (required before reverse)</li>
+        <li>Ensure Snapshot + Schedule exist on the source cluster</li>
+        <li>Disable all protection Schedules on the source cluster</li>
+        <li>Delete the old AMR (Reverse cannot proceed while it exists)</li>
+        <li>Apply the reversed AMR YAML via the Create Mirror form</li>
+      </ol>
+    </div>
+    <div style="margin-bottom:14px;">
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="rw-confirm-checkbox" style="margin-top:3px;">
+        <span style="font-size:13px;">I understand data will be overwritten and existing resources on the destination cluster must be down.</span>
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideReverseWarningModal()">Cancel</button>
+      <button class="btn primary" id="rw-continue-btn" onclick="continueReverseWizard()" disabled>Continue to Wizard</button>
+    </div>
+  </div>
+</div>
+
+<div id="reverse-wizard-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideWizardModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:780px;">
+    <h3>Reverse (YAML) Wizard</h3>
+    <div id="rwiz-step-indicator" style="display:flex;justify-content:space-between;margin:8px 0 16px 0;font-size:12px;color:#666;"></div>
+    <div id="rwiz-panel-1" class="rwiz-panel" style="display:none;"></div>
+    <div id="rwiz-panel-2" class="rwiz-panel" style="display:none;"></div>
+    <div id="rwiz-panel-3" class="rwiz-panel" style="display:none;"></div>
+    <div id="rwiz-panel-4" class="rwiz-panel" style="display:none;"></div>
+    <div id="rwiz-panel-5" class="rwiz-panel" style="display:none;"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideWizardModal()">Close</button>
+      <button class="btn" id="rwiz-recheck-btn" onclick="refreshWizardState()">Re-check</button>
+      <button class="btn primary" id="rwiz-next-btn" onclick="wizardNext()" disabled>Continue</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let drData = { clusters: {}, relationships: [], totals: {} };
+let allProfiles = {};
+let allActiveProfile = '';
+
+async function loadDROverview() {
+  document.getElementById('dr-tbody').innerHTML = '<tr><td colspan="13" class="empty">Loading...</td></tr>';
+  try {
+    const [overviewRes, settingsRes] = await Promise.all([
+      tpFetch('/api/dr/overview'),
+      tpFetch('/api/settings'),
+    ]);
+    drData = await overviewRes.json();
+    const settings = await settingsRes.json();
+    allProfiles = settings.profiles || {};
+    allActiveProfile = settings.active || '';
+    renderDRStats();
+    renderDRTable();
+    populateClusterSelects();
+    populateDrProfileSwitcher();
+  } catch (e) {
+    console.error('DR overview failed:', e);
+    document.getElementById('dr-tbody').innerHTML = '<tr><td colspan="13" class="empty">Failed to load DR data</td></tr>';
+  }
+}
+
+function populateDrProfileSwitcher() {
+  const sel = document.getElementById('dr-active-profile');
+  const btn = document.getElementById('dr-switch-btn');
+  if (!sel) return;
+  const names = Object.keys(allProfiles || {});
+  if (!names.length) {
+    sel.innerHTML = '<option value="">(no profiles)</option>';
+    sel.disabled = true;
+    if (btn) btn.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const current = allActiveProfile || names[0];
+  sel.innerHTML = names
+    .map(n => `<option value="${escapeHtml(n)}" ${n === current ? 'selected' : ''}>${escapeHtml(n)}</option>`)
+    .join('');
+  syncDrSwitchBtn();
+  sel.onchange = syncDrSwitchBtn;
+}
+
+function syncDrSwitchBtn() {
+  const sel = document.getElementById('dr-active-profile');
+  const btn = document.getElementById('dr-switch-btn');
+  if (!sel || !btn) return;
+  const picked = sel.value;
+  btn.disabled = !picked || picked === (allActiveProfile || '');
+}
+
+async function drSwitchProfile() {
+  const sel = document.getElementById('dr-active-profile');
+  const btn = document.getElementById('dr-switch-btn');
+  if (!sel) return;
+  const target = sel.value;
+  if (!target || target === allActiveProfile) return;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Switching...';
+  try {
+    const res = await tpFetch('/api/settings/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: target }),
+    });
+    const data = await res.json();
+    if (!res.ok || (data.ok === false)) {
+      toast('Switch failed: ' + (data.message || res.status), 'error');
+      btn.disabled = false;
+      btn.textContent = original;
+      return;
+    }
+    toast('Switched to ' + target, 'success');
+    setTimeout(() => location.reload(), 300);
+  } catch (e) {
+    toast('Switch failed: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+function renderDRStats() {
+  const profiles = Object.keys(drData.clusters || {});
+  if (profiles.length >= 1) {
+    document.getElementById('dr-cluster-1-label').textContent = profiles[0];
+    document.getElementById('dr-cluster-1-count').textContent = drData.clusters[profiles[0]]?.apps || 0;
+  }
+  if (profiles.length >= 2) {
+    document.getElementById('dr-cluster-2-label').textContent = profiles[1];
+    document.getElementById('dr-cluster-2-count').textContent = drData.clusters[profiles[1]]?.apps || 0;
+  }
+  const t = drData.totals || {};
+  document.getElementById('dr-total-healthy').textContent = t.healthy || 0;
+  document.getElementById('dr-total-degraded').textContent = t.degraded || 0;
+  document.getElementById('dr-total-failed').textContent = t.failed || 0;
+}
+
+function renderDRTable() {
+  const q = (document.getElementById('dr-filter-q')?.value || '').toLowerCase();
+  const rows = (drData.relationships || []).filter(r =>
+    !q || (r.name||'').toLowerCase().includes(q) ||
+          (r.sourceApplication||'').toLowerCase().includes(q) ||
+          (r.destinationApplication||'').toLowerCase().includes(q) ||
+          (r.sourceCluster||'').toLowerCase().includes(q) ||
+          (r.sourceNamespace||'').toLowerCase().includes(q) ||
+          (r.destinationNamespace||'').toLowerCase().includes(q) ||
+          (r.destinationCluster||'').toLowerCase().includes(q) ||
+          (r._cluster||'').toLowerCase().includes(q) ||
+          (r.destinationCluster||'').toLowerCase().includes(q)
+  );
+  document.getElementById('dr-tbody').innerHTML = rows.map(r => `
+    <tr>
+      <td>
+        <b>${esc(r.name)}</b>
+        <div class="text-muted" style="font-size:11px;">${esc(r.namespace || '—')}</div>
+      </td>
+      <td>${esc(r.sourceCluster || '—')}</td>
+      <td class="text-muted">${esc(r.sourceNamespace || '—')}</td>
+      <td>${esc(r.sourceApplication)}</td>
+      <td class="text-muted" style="font-size:12px;">${esc(r.sourceAppVault)}</td>
+      <td><span class="badge protected">${esc(r.destinationCluster || '—')}</span></td>
+      <td class="text-muted">${esc(r.destinationNamespace || '—')}</td>
+      <td>${esc(r.destinationApplication)}</td>
+      <td class="text-muted" style="font-size:12px;">${esc(r.destinationAppVault)}</td>
+      <td class="text-muted" style="font-size:11px;max-width:140px;overflow:hidden;text-overflow:ellipsis;">${esc(r.recurrenceRule || 'Manual')}</td>
+      <td>${drStateBadge(r.state)}</td>
+      <td>
+        <div>${esc(r.lastTransferTime || '—')}</div>
+        ${r.lastTransferSizeHuman && r.lastTransferSizeHuman !== '—' ? `<div class="text-muted">${esc(r.lastTransferSizeHuman)}</div>` : ''}
+      </td>
+      <td>
+        <button class="btn small secondary" onclick="viewAMR('${esc(r.namespace)}','${esc(r.name)}','${esc(r.destinationCluster||'')}')">View</button>
+        ${isAdmin() ? (r.state === 'Promoted' ?
+          `<button class="btn small warning" data-amr-action="resync" data-ns="${esc(r.namespace)}" data-name="${esc(r.name)}" onclick="resyncAMR('${esc(r.namespace)}','${esc(r.name)}','${esc(r.destinationCluster||'')}')">Resync</button>
+           <button class="btn small warning" onclick="reverseYamlAMR('${esc(r.namespace)}','${esc(r.name)}','${esc(r.destinationCluster||'')}')">Reverse Resync</button>` :
+          `<button class="btn small secondary" onclick="failoverAMR('${esc(r.namespace)}','${esc(r.name)}','${esc(r.destinationCluster||'')}')">Failover</button>`
+        ) : ''}
+        ${isAdmin() ? `<button class="btn small danger" data-amr-action="delete" data-ns="${esc(r.namespace)}" data-name="${esc(r.name)}" onclick="deleteAMR('${esc(r.namespace)}','${esc(r.name)}','${esc(r.destinationCluster||'')}')">Del</button>` : ''}
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="13" class="empty">No mirror relationships found</td></tr>';
+}
+
+function drStateBadge(state) {
+  const s = (state || '').toLowerCase();
+  if (s === 'completed' || s === 'success' || s === 'available' || s === 'ready' || s === 'established') return '<span class="badge success">HEALTHY</span>';
+  if (s === 'failed' || s === 'error') return '<span class="badge error">FAILED</span>';
+  if (s === 'running' || s === 'inprogress' || s === 'initializing' || s === 'syncing') return '<span class="badge pending">SYNCING</span>';
+  if (s === 'paused') return '<span class="badge warning">PAUSED</span>';
+  if (s === 'promoted') return '<span class="badge warning">PROMOTED</span>';
+  return `<span class="badge info">${esc(state || 'UNKNOWN')}</span>`;
+}
+
+function getSourceProfile() {
+  // Source = the OTHER profile (non-active)
+  const pnames = Object.keys(allProfiles);
+  return pnames.find(p => p !== allActiveProfile);
+}
+
+function populateClusterSelects() {
+  // Source cluster = non-active profile (read-only display)
+  const srcProfile = getSourceProfile();
+  const srcDisplay = document.getElementById('amr-source-cluster-display');
+  if (srcProfile && allProfiles[srcProfile]) {
+    const p = allProfiles[srcProfile];
+    srcDisplay.value = `${srcProfile} — ${p.description || ''}`;
+  } else {
+    srcDisplay.value = '(no source cluster profile)';
+  }
+
+  // Destination cluster = active profile (read-only display, AMR applied here)
+  const dstDisplay = document.getElementById('amr-dest-cluster-display');
+  const active = allActiveProfile;
+  if (active && allProfiles[active]) {
+    const p = allProfiles[active];
+    dstDisplay.value = `${active} — ${p.description || ''}`;
+  } else {
+    dstDisplay.value = '(no active profile — switch to destination cluster first)';
+  }
+
+  // Show banner warning if no active profile
+  const banner = document.getElementById('dr-active-banner');
+  const bannerText = document.getElementById('dr-active-banner-text');
+  if (!active) {
+    banner.style.display = 'block';
+    bannerText.textContent = 'No active cluster profile. Switch to the destination cluster first.';
+  } else if (Object.keys(allProfiles).length >= 2) {
+    banner.style.display = 'block';
+    const dstName = Object.keys(allProfiles).find(p => p !== active);
+    // Use textContent + bold span to avoid XSS via unescaped profile names
+    bannerText.innerHTML = '';
+    const safeText1 = document.createTextNode('DR creates AppMirrorRelationship on the ');
+    const b1 = document.createElement('b'); b1.textContent = 'destination';
+    const safeText2 = document.createTextNode(' cluster. ');
+    const profileSpan = document.createElement('span');
+    profileSpan.style.fontSize = '16px';
+    profileSpan.style.fontWeight = '600';
+    profileSpan.append(
+      document.createTextNode('Your active profile is '),
+      (() => { const b = document.createElement('b'); b.textContent = active; return b; })(),
+    );
+    const safeText3 = document.createTextNode(dstName ? `. AMR will be applied to ` : '. ');
+    const b3 = document.createElement('b'); b3.textContent = dstName || '';
+    const safeText4 = document.createTextNode(dstName ? ` when you create it. Switch your active profile to ` : ' ');
+    const b4 = document.createElement('b'); b4.textContent = dstName || '(other cluster)';
+    const safeText5 = document.createTextNode(' if you want AMR to be created there.');
+    bannerText.append(safeText1, b1, safeText2, profileSpan, safeText3, b3, safeText4, b4, safeText5);
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+async function loadAppsForCluster(profileName, namespace) {
+  const ctx = allProfiles[profileName]?.kubecontext || allProfiles[profileName]?.kubeconfig_context || '';
+  const url = namespace
+    ? `/api/dr/apps?context=${encodeURIComponent(ctx)}&namespace=${encodeURIComponent(namespace)}`
+    : `/api/dr/apps?context=${encodeURIComponent(ctx)}`;
+  try {
+    const res = await tpFetch(url);
+    if (!res.ok) {
+      toast(`Failed to load apps from '${profileName}': HTTP ${res.status}`, 'error');
+      return [];
+    }
+    const data = await res.json();
+    const apps = data.items || [];
+    return apps;
+  } catch (e) {
+    toast(`Failed to load apps from '${profileName}': ${e.message}`, 'error');
+    return [];
+  }
+}
+
+async function loadAppVaultsForCluster(profileName) {
+  const ctx = allProfiles[profileName]?.kubecontext || allProfiles[profileName]?.kubeconfig_context || '';
+  try {
+    const res = await tpFetch(`/api/dr/appvaults?context=${encodeURIComponent(ctx)}`);
+    if (!res.ok) {
+      toast(`Failed to load AppVaults from '${profileName}': HTTP ${res.status}`, 'error');
+      return [];
+    }
+    const data = await res.json();
+    return data.items || [];
+  } catch (e) {
+    toast(`Failed to load AppVaults from '${profileName}': ${e.message}`, 'error');
+    return [];
+  }
+}
+
+async function loadNamespacesForCluster(profileName) {
+  const ctx = allProfiles[profileName]?.kubecontext || allProfiles[profileName]?.kubeconfig_context || '';
+  try {
+    const res = await tpFetch(`/api/dr/namespaces?context=${encodeURIComponent(ctx)}`);
+    if (!res.ok) {
+      toast(`Failed to load namespaces from '${profileName}': HTTP ${res.status}`, 'error');
+      return [];
+    }
+    const data = await res.json();
+    return data.items || [];
+  } catch (e) {
+    toast(`Failed to load namespaces from '${profileName}': ${e.message}`, 'error');
+    return [];
+  }
+}
+
+async function loadStorageClassesForCluster(profileName) {
+  const ctx = allProfiles[profileName]?.kubecontext || allProfiles[profileName]?.kubeconfig_context || '';
+  try {
+    const res = await tpFetch(`/api/dr/storageclasses?context=${encodeURIComponent(ctx)}`);
+    if (!res.ok) {
+      toast(`Failed to load storage classes from '${profileName}': HTTP ${res.status}`, 'error');
+      return [];
+    }
+    const data = await res.json();
+    return data.items || [];
+  } catch (e) {
+    toast(`Failed to load storage classes from '${profileName}': ${e.message}`, 'error');
+    return [];
+  }
+}
+
+async function loadSourceClusterData() {
+  // Source = non-active profile (per docs, AMR applied on destination = active)
+  const cluster = getSourceProfile();
+  if (!cluster || !allProfiles[cluster]) return;
+  const [avs, namespaces] = await Promise.all([
+    loadAppVaultsForCluster(cluster),
+    loadNamespacesForCluster(cluster),
+  ]);
+  document.getElementById('amr-source-appvault').innerHTML = avs.map(av => `<option value="${esc(av.name)}">${esc(av.name)}</option>`).join('') || '<option value="">No appvaults</option>';
+  const nsSelect = document.getElementById('amr-source-ns');
+  nsSelect.innerHTML = namespaces.map(ns => `<option value="${esc(ns.name)}"${ns.name === 'trident-protect' ? ' selected' : ''}>${esc(ns.name)}</option>`).join('') || '<option value="">No namespaces</option>';
+  await updateSourceAppInfo();
+}
+
+document.getElementById('amr-source-ns').addEventListener('change', updateSourceAppInfo);
+document.getElementById('amr-source-app').addEventListener('change', onSourceAppChange);
+
+let sourceAppInfo = {name: '', uid: ''};
+
+async function updateSourceAppInfo() {
+  // Populate the Source Application dropdown from the selected source namespace.
+  // Auto-selects the first app when there is exactly one (preserves the previous
+  // single-app auto-detect behavior). When multiple apps exist, leaves the user
+  // to choose but defaults to the first so the form is immediately submit-able.
+  const cluster = getSourceProfile();
+  const ns = document.getElementById('amr-source-ns').value;
+  const appSelect = document.getElementById('amr-source-app');
+  if (!cluster || !ns) {
+    appSelect.innerHTML = '<option value="">—</option>';
+    appSelect.value = '';
+    sourceAppInfo = {name: '', uid: ''};
+    setSourceAppInfoText();
+    return;
+  }
+  const apps = await loadAppsForCluster(cluster, ns);
+  if (!apps.length) {
+    appSelect.innerHTML = '<option value="">No Application CRs in this namespace</option>';
+    appSelect.value = '';
+    sourceAppInfo = {name: '', uid: ''};
+    setSourceAppInfoText();
+    return;
+  }
+  // Build option list; carry uid via data-uid.
+  appSelect.innerHTML = apps.map(a =>
+    `<option value="${esc(a.name)}" data-uid="${esc(a.uid || '')}">${esc(a.name)}</option>`
+  ).join('');
+  // Default-select the first app (preserves prior auto-detect behavior).
+  appSelect.value = apps[0].name || '';
+  sourceAppInfo = {name: apps[0].name || '', uid: apps[0].uid || ''};
+  setSourceAppInfoText();
+}
+
+function onSourceAppChange() {
+  // Pull the selected app's name + uid out of the dropdown.
+  const appSelect = document.getElementById('amr-source-app');
+  const sel = appSelect.options[appSelect.selectedIndex];
+  if (!sel || !sel.value) {
+    sourceAppInfo = {name: '', uid: ''};
+  } else {
+    sourceAppInfo = {name: sel.value, uid: sel.dataset.uid || ''};
+  }
+  setSourceAppInfoText();
+}
+
+function setSourceAppInfoText() {
+  const el = document.getElementById('amr-source-app-info');
+  if (!el) return;
+  if (sourceAppInfo.name) {
+    el.textContent = `Application: ${sourceAppInfo.name} (UID ${sourceAppInfo.uid})`;
+  } else {
+    el.textContent = 'No Application CR found in this namespace on the source cluster';
+  }
+}
+
+async function loadDestClusterData() {
+  // Destination = active profile (where AMR will be applied)
+  const cluster = allActiveProfile;
+  if (!cluster || !allProfiles[cluster]) return;
+  const [avs, namespaces, storageclasses] = await Promise.all([
+    loadAppVaultsForCluster(cluster),
+    loadNamespacesForCluster(cluster),
+    loadStorageClassesForCluster(cluster),
+  ]);
+  document.getElementById('amr-dest-appvault').innerHTML = avs.map(av => `<option value="${esc(av.name)}">${esc(av.name)}</option>`).join('') || '<option value="">No appvaults</option>';
+  const nsSelect = document.getElementById('amr-dest-ns');
+  nsSelect.innerHTML = namespaces.map(ns => `<option value="${esc(ns.name)}"${ns.name === 'trident-protect' ? ' selected' : ''}>${esc(ns.name)}</option>`).join('') || '<option value="">No namespaces</option>';
+  const scSelect = document.getElementById('amr-storageclass');
+  scSelect.innerHTML = storageclasses.map(sc => `<option value="${esc(sc)}">${esc(sc)}</option>`).join('') || '<option value="">No storage classes</option>';
+}
+
+// ---- Create AMR ----
+
+// Recurrence rule presets (RFC-5545 RRULE values).
+// DTSTART is generated at submit time so the schedule starts "now".
+const RECURRENCE_PRESETS = {
+  '1hour': 'FREQ=HOURLY;INTERVAL=1',
+  '8hour': 'FREQ=HOURLY;INTERVAL=8',
+  'daily': 'FREQ=DAILY;INTERVAL=1',
+};
+
+function buildDTSTART() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return now.getUTCFullYear().toString() +
+         pad(now.getUTCMonth() + 1) +
+         pad(now.getUTCDate()) + 'T' +
+         pad(now.getUTCHours()) +
+         pad(now.getUTCMinutes()) +
+         pad(now.getUTCSeconds()) + 'Z';
+}
+
+function getCurrentRecurrenceRule() {
+  const preset = document.getElementById('amr-recurrence-preset').value;
+  const rrule = RECURRENCE_PRESETS[preset];
+  if (!rrule) return '';
+  return `DTSTART:${buildDTSTART()}\nRRULE:${rrule}`;
+}
+
+function updateRecurrencePreview() {
+  const preview = document.getElementById('amr-recurrence-preview');
+  if (preview) {
+    preview.textContent = getCurrentRecurrenceRule().replace(/\n/g, ' ⏎ ');
+  }
+}
+
+document.getElementById('amr-recurrence-preset').addEventListener('change', updateRecurrencePreview);
+
+const DEFAULT_AMR_YAML = `# AppMirrorRelationship is created on the DESTINATION cluster, in the DESTINATION namespace.
+# Replace 'my-app-namespace' below with the destination namespace (where the app will run on the destination).
+# sourceApplicationName/UID = the Application CR on the SOURCE cluster (auto-detected from the form).
+apiVersion: protect.trident.netapp.io/v1
+kind: AppMirrorRelationship
+metadata:
+  name: my-mirror
+  namespace: my-app-namespace
+spec:
+  desiredState: Established
+  sourceAppVaultRef: ontap-s3-appvault
+  destinationAppVaultRef: ontap-s3-appvault
+  sourceApplicationName: my-app
+  sourceApplicationUID: ""
+  recurrenceRule: |-
+    DTSTART:20260727T153000Z
+    RRULE:FREQ=HOURLY;INTERVAL=1
+  storageClassName: ""`;
+
+function switchAMRTab(tab) {
+  const isForm = tab === 'form';
+  document.getElementById('amr-form-tab').style.display = isForm ? '' : 'none';
+  document.getElementById('amr-yaml-tab').style.display = isForm ? 'none' : '';
+  document.getElementById('amr-tab-form').classList.toggle('active', isForm);
+  document.getElementById('amr-tab-yaml').classList.toggle('active', !isForm);
+  if (!isForm) {
+    document.getElementById('amr-yaml').value = buildAMRYamlFromForm();
+  }
+}
+
+function buildAMRYamlFromForm() {
+  const name = document.getElementById('amr-name').value.trim() || 'my-mirror';
+  const srcNs = document.getElementById('amr-source-ns').value || 'trident-protect';
+  const dstNs = document.getElementById('amr-dest-ns').value || 'trident-protect';
+  const srcAv = document.getElementById('amr-source-appvault').value;
+  const dstAv = document.getElementById('amr-dest-appvault').value;
+  const recurrence = getCurrentRecurrenceRule();
+  const sc = document.getElementById('amr-storageclass').value;
+
+  // recurrenceRule format: "DTSTART:...\nRRULE:..." (newline-separated)
+  // Use YAML block scalar (|-) to preserve newline through oc apply → API conversion
+  const [dtstartPart, rrulePart] = recurrence.split('\n');
+
+  let yaml = `apiVersion: protect.trident.netapp.io/v1
+kind: AppMirrorRelationship
+metadata:
+  name: ${name}
+  namespace: ${dstNs}
+spec:
+  desiredState: Established
+  sourceAppVaultRef: ${srcAv}
+  destinationAppVaultRef: ${dstAv}
+  sourceApplicationName: ${sourceAppInfo.name}
+  sourceApplicationUID: "${sourceAppInfo.uid}"
+  recurrenceRule: |-
+    ${dtstartPart}
+    ${rrulePart}
+  namespaceMapping:
+    - source: ${srcNs}
+      destination: ${dstNs}
+  storageClassName: ${sc}`;
+
+  return yaml;
+}
+
+async function showCreateAMRModal() {
+  if (!tpRequireAdmin()) return;
+  document.getElementById('amr-msg').textContent = '';
+  document.getElementById('amr-name').value = '';
+  document.getElementById('amr-yaml').value = DEFAULT_AMR_YAML;
+  sourceAppInfo = {name: '', uid: ''};
+  setSourceAppInfoText();
+  updateRecurrencePreview();
+
+  populateClusterSelects();
+  // Load source (non-active) and dest (active) cluster data
+  if (getSourceProfile()) {
+    await loadSourceClusterData();
+  }
+  if (allActiveProfile) {
+    await loadDestClusterData();
+  }
+
+  switchAMRTab('form');
+  document.getElementById('create-amr-modal').style.display = 'flex';
+}
+
+function hideCreateAMRModal() {
+  document.getElementById('create-amr-modal').style.display = 'none';
+}
+
+function getAMRYaml() {
+  if (document.getElementById('amr-form-tab').style.display !== 'none') {
+    return buildAMRYamlFromForm();
+  }
+  return document.getElementById('amr-yaml').value.trim();
+}
+
+function showAMRMsg(text, kind) {
+  const el = document.getElementById('amr-msg');
+  el.textContent = text;
+  el.style.color = kind === 'error' ? 'var(--color-error)' : kind === 'success' ? 'var(--color-success)' : '#666';
+  el.style.fontSize = '13px';
+}
+
+async function validateAMRYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getAMRYaml();
+  if (!yaml) { showAMRMsg('YAML required', 'error'); return; }
+  try {
+    const res = await tpFetch('/api/dr/relationships/validate', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAMRMsg(r.message, r.ok ? 'success' : 'error');
+  } catch (e) { showAMRMsg('Validate failed: ' + e.message, 'error'); }
+}
+
+async function applyAMRYAML() {
+  // Applies the YAML only — Trident Protect manages the rest.
+  // On the Form tab the YAML is built from the form; on the YAML tab it is the raw textarea.
+  const isFormTab = document.getElementById('amr-form-tab').style.display !== 'none';
+  if (isFormTab && !sourceAppInfo.name) {
+    showAMRMsg('No Application CR found in the selected source namespace on the source cluster', 'error');
+    return;
+  }
+  if (isFormTab && !document.getElementById('amr-storageclass').value) {
+    showAMRMsg('Storage Class required', 'error');
+    return;
+  }
+  const yaml = getAMRYaml();
+  if (!yaml) { showAMRMsg('YAML required', 'error'); return; }
+
+  const msgEl = document.getElementById('amr-msg');
+  msgEl.innerHTML = '<div class="text-muted">⏳ Validating YAML...</div>';
+  msgEl.style.color = '#666';
+
+  try {
+    const vRes = await tpFetch('/api/dr/relationships/validate', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const v = await vRes.json();
+    if (!v.ok) { showAMRMsg('Invalid: ' + v.message, 'error'); return; }
+    const srcProfile = getSourceProfile();
+    const dstProfile = allActiveProfile;
+    if (!confirm(v.message +
+      `\n\nThe AppMirrorRelationship will be created on the destination cluster '${dstProfile}' (active profile).` +
+      `\nSource cluster = '${srcProfile}'. Trident Protect will pull the source Application manifest from the source AppVault and apply it on the destination.` +
+      `\nNo other CRs will be created by this action.` +
+      `\n\nApply now?`)) return;
+
+    msgEl.innerHTML = '<div class="text-muted">⏳ Applying YAML...</div>';
+    const res = await tpFetch('/api/dr/relationships/create', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAMRMsg(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) {
+      setTimeout(() => { hideCreateAMRModal(); loadDROverview(); }, 1500);
+    }
+  } catch (e) { showAMRMsg('Apply failed: ' + e.message, 'error'); }
+}
+
+// ---- View AMR ----
+
+async function viewAMR(ns, name, clusterProfile) {
+  const ctx = allProfiles[clusterProfile]?.kubecontext || allProfiles[clusterProfile]?.kubeconfig_context || '';
+  try {
+    const [jsonRes, yamlRes] = await Promise.all([
+      tpFetch(`/api/dr/relationships/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?context=${encodeURIComponent(ctx)}`),
+      tpFetch(`/api/dr/relationships/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml&context=${encodeURIComponent(ctx)}`),
+    ]);
+    if (!jsonRes.ok) throw new Error(`HTTP ${jsonRes.status}`);
+    const amr = await jsonRes.json();
+    const yamlText = await yamlRes.text();
+    renderViewAMRModal(amr, yamlText, clusterProfile);
+    document.getElementById('view-amr-modal').style.display = 'flex';
+  } catch (e) {
+    toast('Failed to load AMR: ' + e.message, 'error');
+  }
+}
+
+function renderViewAMRModal(amr, yamlText, clusterProfile) {
+  const md = amr.metadata || {};
+  const sp = amr.spec || {};
+  const st = amr.status || {};
+  const conds = st.conditions || [];
+  const ns_mapping = sp.namespaceMapping || [];
+  const srcNs = (ns_mapping[0] && ns_mapping[0].source) || '-';
+  const destNs = (ns_mapping[0] && ns_mapping[0].destination) || '-';
+  const annotations = md.annotations || {};
+  const sourceCluster = annotations['trident.netapp.io/source-cluster'] || '-';
+
+  document.getElementById('vam-name').textContent = md.name || '-';
+  document.getElementById('vam-source-cluster').textContent = sourceCluster;
+  document.getElementById('vam-source-ns-row').textContent = srcNs;
+  document.getElementById('vam-source-av').textContent = sp.sourceAppVaultRef || '-';
+  document.getElementById('vam-source-app').textContent = sp.sourceApplicationName || '-';
+  document.getElementById('vam-source-uid').textContent = sp.sourceApplicationUID || '-';
+  document.getElementById('vam-dest-cluster').textContent = clusterProfile || amr._cluster || '-';
+  document.getElementById('vam-dest-av').textContent = sp.destinationAppVaultRef || '-';
+  document.getElementById('vam-dest-app').textContent = st.destinationApplicationRef || '-';
+  document.getElementById('vam-dest-ns').textContent = destNs;
+  document.getElementById('vam-desired-state').textContent = sp.desiredState || '-';
+  document.getElementById('vam-recurrence').textContent = sp.recurrenceRule || '-';
+  document.getElementById('vam-storageclass').textContent = sp.storageClassName || '-';
+  document.getElementById('vam-state').innerHTML = drStateBadge(st.state);
+  document.getElementById('vam-last-transfer').textContent = st.lastTransferTime || '-';
+  document.getElementById('vam-last-size').textContent = st.lastTransferSizeBytes != null ? fmtBytes(st.lastTransferSizeBytes) : '-';
+  document.getElementById('vam-error').textContent = st.error || '-';
+
+  document.getElementById('vam-conditions-body').innerHTML = conds.length === 0
+    ? '<tr><td colspan="4" class="empty">No conditions</td></tr>'
+    : conds.map(c => `<tr>
+        <td>${esc(c.type || '-')}</td>
+        <td>${esc(c.status || '-')}</td>
+        <td>${esc(c.reason || '-')}</td>
+        <td>${esc(c.message || '-')}</td>
+      </tr>`).join('');
+
+  document.getElementById('vam-yaml').textContent = yamlText;
+}
+
+function hideViewAMRModal() {
+  document.getElementById('view-amr-modal').style.display = 'none';
+}
+
+async function copyAMRYAML() {
+  const text = document.getElementById('vam-yaml').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied to clipboard', 'success');
+  } catch (e) {
+    toast('Copy failed', 'error');
+  }
+}
+
+// ---- Actions ----
+
+let pendingFailover = {ns: '', name: '', cluster: ''};
+
+function failoverAMR(ns, name, clusterProfile) {
+  if (!tpRequireAdmin()) return;
+  pendingFailover = {ns, name, cluster: clusterProfile};
+  document.getElementById('failover-amr-name').textContent = `${ns}/${name}`;
+  document.getElementById('failover-modal').style.display = 'flex';
+}
+
+function hideFailoverModal() {
+  document.getElementById('failover-modal').style.display = 'none';
+}
+
+async function confirmFailover() {
+  if (!tpRequireAdmin()) return;
+  const {ns, name, cluster} = pendingFailover;
+  hideFailoverModal();
+  const ctx = allProfiles[cluster]?.kubecontext || allProfiles[cluster]?.kubeconfig_context || '';
+  try {
+    const res = await tpFetch(`/api/dr/relationships/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/failover?context=${encodeURIComponent(ctx)}`, {method:'POST'});
+    const r = await res.json();
+    toast(r.ok ? 'Failover triggered' : 'Failover failed: ' + r.message, r.ok ? 'success' : 'error');
+    if (r.ok) setTimeout(loadDROverview, 2000);
+  } catch (e) { toast('Failover failed: ' + e.message, 'error'); }
+}
+
+let pendingResync = {ns: '', name: '', cluster: ''};
+
+function resyncAMR(ns, name, clusterProfile) {
+  if (!tpRequireAdmin()) return;
+  pendingResync = {ns, name, cluster: clusterProfile};
+  document.getElementById('resync-amr-name').textContent = `${ns}/${name}`;
+  document.getElementById('resync-modal').style.display = 'flex';
+}
+
+function hideResyncModal() {
+  document.getElementById('resync-modal').style.display = 'none';
+}
+
+async function confirmResync() {
+  if (!tpRequireAdmin()) return;
+  const {ns, name, cluster} = pendingResync;
+  hideResyncModal();
+  const ctx = allProfiles[cluster]?.kubecontext || allProfiles[cluster]?.kubeconfig_context || '';
+  const btn = document.querySelector(`button[data-amr-action="resync"][data-ns="${ns}"][data-name="${name}"]`);
+  if (btn) setButtonLoading(btn, true);
+  try {
+    const res = await tpFetch(`/api/dr/relationships/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/resync?context=${encodeURIComponent(ctx)}`, {method:'POST'});
+    const r = await res.json();
+    toast(r.ok ? 'Resync triggered' : 'Resync failed: ' + r.message, r.ok ? 'success' : 'error');
+    if (r.ok) setTimeout(loadDROverview, 2000);
+  } catch (e) { toast('Resync failed: ' + e.message, 'error'); }
+  finally { if (btn) setButtonLoading(btn, false); }
+}
+
+async function deleteAMR(ns, name, clusterProfile) {
+  if (!tpRequireAdmin()) return;
+  if (!confirm(`Delete AppMirrorRelationship ${ns}/${name}?\nThis will stop replication.`)) return;
+  const ctx = allProfiles[clusterProfile]?.kubecontext || allProfiles[clusterProfile]?.kubeconfig_context || '';
+  const btn = document.querySelector(`button[data-amr-action="delete"][data-ns="${ns}"][data-name="${name}"]`);
+  if (btn) setButtonLoading(btn, true);
+  try {
+    const res = await tpFetch(`/api/dr/relationships/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?context=${encodeURIComponent(ctx)}`, {method:'DELETE'});
+    const r = await res.json();
+    toast(r.ok ? 'Deleted' : 'Failed: ' + r.message, r.ok ? 'success' : 'error');
+    if (r.ok) loadDROverview();
+  } catch (e) { toast('Delete failed: ' + e.message, 'error'); }
+  finally { if (btn) setButtonLoading(btn, false); }
+}
+
+// ---- Helpers ----
+
+function setButtonLoading(btn, loading) {
+  if (loading) {
+    btn.disabled = true;
+    btn.dataset.originalText = btn.textContent;
+    btn.textContent = '⏳ ...';
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+  }
+}
+
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function fmtBytes(b) {
+  if (b == null) return '-';
+  const u = ['B','KB','MB','GB','TB'];
+  let s = Number(b);
+  for (const x of u) { if (s < 1024) return s.toFixed(1)+' '+x; s /= 1024; }
+  return s.toFixed(1)+' PB';
+}
+
+document.getElementById('dr-filter-q').addEventListener('input', renderDRTable);
+loadDROverview();
+
+// ---- Reverse (YAML) flow: warning → 5-step wizard → existing Create AMR modal ----
+
+let rwizState = null;
+let rwizCurrentStep = 1;
+let rwizAMR = null;
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+async function reverseYamlAMR(ns, name, clusterProfile) {
+  rwizAMR = { namespace: ns, name, clusterProfile };
+  rwizCurrentStep = 1;
+  window.wizardSnapChoice = null;
+  window.wizardBootstrapCreated = false;
+  window.wizardBootstrapName = '';
+  window.wizardSnapDefaultName = '';
+  document.getElementById('rw-confirm-checkbox').checked = false;
+  document.getElementById('rw-continue-btn').disabled = true;
+  document.getElementById('reverse-warning-modal').style.display = 'flex';
+  const cb = document.getElementById('rw-confirm-checkbox');
+  if (cb) cb.onchange = () => {
+    document.getElementById('rw-continue-btn').disabled = !cb.checked;
+  };
+}
+
+function hideReverseWarningModal() {
+  document.getElementById('reverse-warning-modal').style.display = 'none';
+}
+
+async function continueReverseWizard() {
+  hideReverseWarningModal();
+  await refreshWizardState();
+  document.getElementById('reverse-wizard-modal').style.display = 'flex';
+}
+
+function hideWizardModal() {
+  document.getElementById('reverse-wizard-modal').style.display = 'none';
+}
+
+async function refreshWizardState() {
+  const { namespace, name, clusterProfile } = rwizAMR;
+  let otherCluster = '';
+  for (const k of Object.keys(allProfiles || {})) {
+    if (k !== clusterProfile && k !== allActiveProfile) { otherCluster = k; break; }
+  }
+  if (!otherCluster) {
+    toast('Cannot determine other cluster profile', 'error');
+    return;
+  }
+  const ctx = allProfiles[clusterProfile]?.kubecontext
+            || allProfiles[clusterProfile]?.kubeconfig_context || '';
+  try {
+    const res = await tpFetch(`/api/dr/relationships/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/reverse-wizard-state?context=${encodeURIComponent(ctx)}&source_cluster=${encodeURIComponent(otherCluster)}`);
+    const data = await res.json();
+    rwizState = data;
+    rwizState._otherCluster = otherCluster;
+    rwizState._ctx = ctx;
+    renderWizardPanel();
+  } catch (e) {
+    toast('Failed to load wizard state: ' + e.message, 'error');
+  }
+}
+
+function renderWizardIndicator() {
+  const ind = document.getElementById('rwiz-step-indicator');
+  const labels = ['1. Failover', '2. Disable Schedules', '3. Dest Baseline', '4. Delete AMR', '5. Finish'];
+  ind.innerHTML = labels.map((l, i) => {
+    const n = i + 1;
+    let color = '#999';
+    let weight = 'normal';
+    if (n < rwizCurrentStep) { color = '#198754'; weight = 'bold'; }
+    if (n === rwizCurrentStep) { color = '#0067c8'; weight = 'bold'; }
+    const mark = n < rwizCurrentStep ? '✓ ' : (n + '. ');
+    return `<span style="color:${color};font-weight:${weight};">${mark}${l}</span>`;
+  }).join(' &nbsp;|&nbsp; ');
+}
+
+function renderWizardPanel() {
+  renderWizardIndicator();
+  for (let i = 1; i <= 5; i++) {
+    document.getElementById('rwiz-panel-' + i).style.display = 'none';
+  }
+  document.getElementById('rwiz-panel-' + rwizCurrentStep).style.display = '';
+  switch (rwizCurrentStep) {
+    case 1: renderWizardPanel1(); break;
+    case 2: renderWizardPanel2(); break;
+    case 3: renderWizardPanel3_dest(); break;
+    case 4: renderWizardPanel4_delete(); break;
+    case 5: renderWizardPanel5_finish(); break;
+  }
+  wizardUpdateNextButton();
+}
+
+function wizardUpdateNextButton() {
+  const btn = document.getElementById('rwiz-next-btn');
+  btn.style.display = '';
+  btn.disabled = false;
+  if (rwizCurrentStep === 1) {
+    btn.textContent = 'Continue →';
+    btn.disabled = !rwizState?.promoted;
+  } else if (rwizCurrentStep === 2) {
+    btn.textContent = 'Continue →';
+    btn.disabled = !(rwizState?.schedulesToDisable?.length === 0);
+  } else if (rwizCurrentStep === 3) {
+    btn.textContent = 'Continue →';
+    const choice = (window.wizardSnapChoice || 'A');
+    const w = rwizState || {};
+    if (choice === 'A') {
+      btn.disabled = !w.hasSnapshotOnDestination;
+    } else {
+      btn.disabled = !window.wizardBootstrapCreated;
+    }
+  } else if (rwizCurrentStep === 4) {
+    btn.textContent = 'Continue →';
+    btn.disabled = !rwizState?.oldAmrDeleted;
+  } else if (rwizCurrentStep === 5) {
+    btn.textContent = 'Finish';
+    btn.disabled = false;
+  }
+}
+
+function wizardNext() {
+  if (rwizCurrentStep < 5) {
+    rwizCurrentStep += 1;
+    renderWizardPanel();
+  } else {
+    hideWizardModal();
+    toast('Wizard complete. Click "Create AMR" on this page to set up the new (reversed) AMR.', 'success');
+  }
+}
+
+function renderWizardPanel1() {
+  const p = document.getElementById('rwiz-panel-1');
+  const promoted = rwizState?.promoted;
+  p.innerHTML = `
+    <h4 style="margin-top:0;">Step 1 / 5 — Verify AMR state</h4>
+    <p>The current AMR <b>${escapeHtml(rwizAMR.name)}</b> in <code>${escapeHtml(rwizAMR.namespace)}</code> must be in <b>Promoted</b> state.</p>
+    <p>State: ${promoted ? '<span class="badge success">PROMOTED</span> ✓' : '<span class="badge error">NOT PROMOTED</span> ✗'}</p>
+    ${promoted ? '' : `
+      <div style="background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:4px;margin-top:10px;">
+        Click "Failover Now" below to promote the AMR (single <code>oc patch spec.desiredState=Promoted</code>).
+      </div>
+      <button class="btn warning" onclick="wizardFailover()" style="margin-top:10px;">Failover Now</button>
+    `}
+  `;
+}
+
+async function wizardFailover() {
+  if (!tpRequireAdmin()) return;
+  const { namespace, name, clusterProfile } = rwizAMR;
+  const ctx = rwizState._ctx;
+  try {
+    const res = await tpFetch(`/api/dr/relationships/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/failover?context=${encodeURIComponent(ctx)}`, { method: 'POST' });
+    const r = await res.json();
+    toast(r.ok ? 'Failover triggered. Waiting for Promoted...' : 'Failover failed: ' + r.message, r.ok ? 'success' : 'error');
+    setTimeout(refreshWizardState, 3000);
+  } catch (e) { toast('Failover request failed: ' + e.message, 'error'); }
+}
+
+function renderWizardPanel2() {
+  const p = document.getElementById('rwiz-panel-2');
+  const w = rwizState || {};
+  const list = w.schedulesToDisable || [];
+  const all = w.schedulesOnSource || [];
+  p.innerHTML = `
+    <h4 style="margin-top:0;">Step 2 / 5 — Disable schedules on source cluster</h4>
+    <p>On the reverse-source cluster <code>${escapeHtml(w.sourceClusterProfile || '')}</code> / ns <code>${escapeHtml(w.sourceNamespace || '')}</code>, this app currently has <b>${all.length}</b> schedule(s) registered. The reverse sync must not race with an active schedule on the source side — any enabled schedule must be disabled first.</p>
+
+    ${list.length === 0
+      ? `<div style="background:#d1e7dd;border:1px solid #198754;padding:10px;border-radius:6px;margin-top:10px;color:#0f5132;">
+           ✓ No schedules to disable — safe to proceed.
+         </div>`
+      : `<div style="background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:6px;margin-top:10px;">
+           <b>${list.length}</b> schedule(s) still <span class="badge pending">enabled</span>. Click "Disable All" to disable them at once.
+         </div>
+         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+           <thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Name</th><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">Namespace</th><th style="text-align:left;padding:6px;border-bottom:1px solid #ddd;">State</th></tr></thead>
+           <tbody>${list.map(s => `<tr><td style="padding:6px;">${escapeHtml(s.name)}</td><td style="padding:6px;">${escapeHtml(s.namespace)}</td><td style="padding:6px;"><span class="badge pending">enabled</span></td></tr>`).join('')}</tbody>
+         </table>
+         <button class="btn warning" onclick="wizardDisableAll()" style="margin-top:10px;">Disable All (${list.length})</button>`}
+  `;
+}
+
+async function wizardDisableAll() {
+  if (!tpRequireAdmin()) return;
+  const list = rwizState?.schedulesToDisable || [];
+  for (const s of list) {
+    try {
+      await tpFetch(`/api/schedules/${encodeURIComponent(s.namespace)}/${encodeURIComponent(s.name)}/disable`, { method: 'POST' });
+    } catch (e) { console.error('disable failed', s, e); }
+  }
+  toast('Disable All triggered. Re-checking...', 'success');
+  setTimeout(refreshWizardState, 1500);
+}
+
+function renderWizardPanel3_dest() {
+  const p = document.getElementById('rwiz-panel-3');
+  const w = rwizState || {};
+  const choice = (window.wizardSnapChoice || 'A');
+  const hasSched = !!w.hasScheduleOnDestination;
+  const hasSnap = !!w.hasSnapshotOnDestination;
+  const latestName = w.latestSnapshotName || '—';
+  const snaps = w.latestSnapshotsOnDestination || [];
+  const created = window.wizardBootstrapCreated;
+
+  const defaultName = (window.wizardSnapDefaultName) || `reverse-bootstrap-${escapeHtml(w.amrName || 'amr')}-${Math.floor(Date.now()/1000)}`;
+
+  const schedulesList = (w.schedulesOnDestination || []).map(s =>
+    `<li>${escapeHtml(s.name)} <span class="badge pending">in ${escapeHtml(s.namespace)}</span></li>`).join('') || '<li class="text-muted">No schedules found</li>';
+  const snapsRows = snaps.length === 0
+    ? '<tr><td colspan="3" class="text-muted" style="padding:8px;">No snapshots found</td></tr>'
+    : snaps.map((s, i) => {
+        const latest = (s.name === w.latestSnapshotName && s.name) ? ' <b>[LATEST]</b>' : '';
+        return `<tr>
+          <td style="padding:6px;">${escapeHtml(s.name)}${latest}</td>
+          <td style="padding:6px;">${escapeHtml(s.state || '?')}</td>
+          <td style="padding:6px;color:#666;font-size:12px;">${escapeHtml(s.creationTimestamp || '')}</td>
+        </tr>`;
+      }).join('');
+
+  const missSched = hasSched ? '' : '<div style="background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:4px;margin:8px 0 0 0;color:#856404;"><b>⚠ No schedule protecting the destination app</b> — recommended to create one for ongoing backups, but you can continue without it.</div>';
+  const missSnap = hasSnap ? '' : '<div style="background:#f8d7da;border:1px solid #dc3545;padding:10px;border-radius:4px;margin:8px 0 0 0;color:#721c24;"><b>❌ No snapshot baseline found on destination cluster</b> — you MUST create one (Choice B) before continuing.</div>';
+
+  p.innerHTML = `
+    <h4 style="margin-top:0;">Step 3 / 5 — Destination baseline + snapshot choice</h4>
+    <p>This step verifies the promoted cluster (<code>${escapeHtml(rwizAMR.clusterProfile || '')}</code>) has a <b>snapshot baseline</b> to bootstrap reverse replication. A schedule protecting the destination app is recommended but not required — you may continue without it.</p>
+
+    <div style="background:#f8f9fa;border:1px solid #ddd;border-radius:6px;padding:10px 14px;margin:10px 0;">
+      <b>Schedules on destination cluster <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code> / ns <code>${escapeHtml(w.destinationNamespace || '')}</code>:</b>
+      <ul style="margin:6px 0 0 16px;font-size:13px;">${schedulesList}</ul>
+      ${missSched}
+    </div>
+
+    <div style="background:#f8f9fa;border:1px solid #ddd;border-radius:6px;padding:10px 14px;margin:10px 0;">
+      <b>Recent snapshots on destination cluster:</b>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;">
+        <thead><tr style="background:#eee;"><th style="text-align:left;padding:6px;">Name</th><th style="text-align:left;padding:6px;">State</th><th style="text-align:left;padding:6px;">Created</th></tr></thead>
+        <tbody>${snapsRows}</tbody>
+      </table>
+      ${missSnap}
+    </div>
+
+    <div style="border:1px solid #ddd;border-radius:6px;padding:12px 14px;margin:10px 0;">
+      <b>Choose baseline snapshot for reverse:</b>
+      <label style="display:block;margin:8px 0;cursor:pointer;font-size:13px;">
+        <input type="radio" name="rwsnap" value="A" ${choice === 'A' ? 'checked' : ''} onclick="wizardSnapChoiceChanged('A')">
+        <b>A. Use latest existing snapshot</b>
+        ${hasSnap ? `<span style="color:#198754;">— will use <code>${escapeHtml(latestName)}</code></span>` : '<span style="color:#dc3545;">— no completed snapshot available (force B)</span>'}
+      </label>
+      <label style="display:block;margin:8px 0;cursor:pointer;font-size:13px;">
+        <input type="radio" name="rwsnap" value="B" ${choice === 'B' ? 'checked' : ''} onclick="wizardSnapChoiceChanged('B')">
+        <b>B. Create new snapshot first</b>
+        ${created ? `<span style="color:#198754;">— created <code>${escapeHtml(window.wizardBootstrapName || '')}</code></span>` : '<span style="color:#666;">— click "Create Snapshot" button below'}</span>
+      </label>
+      <div id="rwiz-create-snap-area" style="display:${choice === 'B' ? 'block' : 'none'};margin-top:8px;padding:10px;background:#fefefe;border:1px dashed #ccc;border-radius:4px;">
+        <label style="display:block;font-size:12px;color:#666;">Snapshot name (on destination cluster ns <code>${escapeHtml(w.destinationNamespace || '')}</code>):</label>
+        <input type="text" id="rwiz-snap-name" value="${escapeHtml(defaultName)}" style="width:100%;padding:6px;font-family:var(--font-mono);font-size:12px;">
+        <button class="btn warning" onclick="wizardCreateBootstrapSnapshot()" style="margin-top:8px;">Create Snapshot Now</button>
+      </div>
+    </div>
+  `;
+
+  if (!hasSnap && choice === 'A') {
+    window.wizardSnapChoice = 'B';
+    renderWizardPanel3_dest();
+    return;
+  }
+}
+
+function wizardSnapChoiceChanged(value) {
+  window.wizardSnapChoice = value;
+  window.wizardBootstrapCreated = false;
+  window.wizardBootstrapName = '';
+  renderWizardPanel3_dest();
+}
+
+async function wizardCreateBootstrapSnapshot() {
+  if (!tpRequireAdmin()) return;
+  const w = rwizState || {};
+  const ctx = rwizState._ctx;
+  const { namespace, name } = rwizAMR;
+  const snapName = (document.getElementById('rwiz-snap-name')?.value || '').trim();
+  if (!snapName) {
+    toast('Snapshot name required', 'error');
+    return;
+  }
+  if (!w.sourceAppName || !w.sourceAppVault) {
+    toast('Missing promoted app / appVault info', 'error');
+    return;
+  }
+  try {
+    toast(`Creating snapshot ${snapName}…`, 'info');
+    const res = await tpFetch(`/api/dr/relationships/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/reverse-wizard-create-bootstrap-snapshot?context=${encodeURIComponent(ctx)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: snapName, application_ref: w.sourceAppName, appvault_ref: w.sourceAppVault }),
+    });
+    const r = await res.json();
+    if (r.ok) {
+      toast(`Snapshot ${r.snapshot_name || snapName} created`, 'success');
+      window.wizardBootstrapCreated = true;
+      window.wizardBootstrapName = r.snapshot_name || snapName;
+      window.wizardSnapDefaultName = window.wizardBootstrapName;
+      await refreshWizardState();
+      renderWizardPanel3_dest();
+    } else {
+      toast('Create snapshot failed: ' + r.message, 'error');
+    }
+  } catch (e) { toast('Request failed: ' + e.message, 'error'); }
+}
+
+function renderWizardPanel4_delete() {
+  const p = document.getElementById('rwiz-panel-4');
+  const w = rwizState || {};
+  const deletedAt = w._deletedAt ? new Date(w._deletedAt).toLocaleTimeString() : '';
+  p.innerHTML = `
+    <h4 style="margin-top:0;">Step 4 / 5 — Delete the old AMR</h4>
+    ${w.oldAmrDeleted
+      ? `<p>✓ Old AMR has been deleted ${deletedAt ? '(' + escapeHtml(deletedAt) + ')' : ''}.</p>
+         ${w.amrFetchError ? '<p style="color:#888;font-size:12px;">Note: ' + escapeHtml(w.amrFetchError.split('\\n')[0]) + '</p>' : ''}`
+      : `<p>The old AMR <code>${escapeHtml(w.amrName)}</code> still exists in <code>${escapeHtml(w.amrNamespace)}</code>.</p>
+         <div style="background:#fff3cd;border:1px solid #ffc107;padding:10px;border-radius:4px;margin-top:10px;">
+           Click "Delete Old AMR" to remove it (single <code>oc delete appmirrorrelationship</code>).
+         </div>
+         <button class="btn danger" onclick="wizardDeleteOldAmr()" style="margin-top:10px;">Delete Old AMR</button>`}
+  `;
+}
+
+async function wizardDeleteOldAmr() {
+  if (!tpRequireAdmin()) return;
+  const { namespace, name } = rwizAMR;
+  const ctx = rwizState._ctx;
+  if (!confirm(`Delete AMR ${namespace}/${name}?`)) return;
+  try {
+    const res = await tpFetch(`/api/dr/relationships/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}?context=${encodeURIComponent(ctx)}`, { method: 'DELETE' });
+    const r = await res.json();
+    toast(r.ok ? 'AMR deleted' : 'Delete failed: ' + r.message, r.ok ? 'success' : 'error');
+    if (!r.ok) return;
+    for (let i = 0; i < 5; i++) {
+      await new Promise(resv => setTimeout(resv, 1500));
+      await refreshWizardState();
+      if (rwizState && rwizState.oldAmrDeleted) break;
+    }
+    if (rwizState && rwizState.oldAmrDeleted) {
+      rwizState._deletedAt = new Date().toISOString();
+      renderWizardPanel();
+      toast('Old AMR verified deleted. You can Continue.', 'success');
+    } else {
+      toast('Old AMR still appears to exist; click Re-check.', 'error');
+    }
+  } catch (e) { toast('Delete request failed: ' + e.message, 'error'); }
+}
+
+function renderWizardPanel5_finish() {
+  const p = document.getElementById('rwiz-panel-5');
+  const w = rwizState || {};
+  const activeMatch = rwizAMR.clusterProfile === w.activeProfile;
+  p.innerHTML = `
+    <h4 style="margin-top:0;">Step 5 / 5 — Wizard complete</h4>
+    <p>✓ All prerequisites met. The 5-step gate is complete.</p>
+    <p>Close the wizard and click the <b>Create AMR</b> button at the top of this page to set up the new (reversed) AMR. Fill the form with:</p>
+    <ul style="font-size:13px;line-height:1.7;">
+      <li><b>Name:</b> <code>${escapeHtml(w.amrName)}</code></li>
+      <li><b>Source Cluster:</b> <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code> (the ACTIVE profile, where promoted data lives)</li>
+      <li><b>Source Namespace:</b> <code>${escapeHtml(w.sourceNamespace || '')}</code> (original destination ns)</li>
+      <li><b>Source App:</b> <code>${escapeHtml(w.sourceAppName || '')}</code> (UID ${escapeHtml((w.sourceAppUID || '').slice(0,8))}…)</li>
+      <li><b>Source AppVault:</b> <code>${escapeHtml(w.sourceAppVault || '')}</code></li>
+      <li><b>Destination Cluster:</b> <code>${escapeHtml(w.sourceClusterProfile || '')}</code> (the OTHER profile, where new AMR destination will be)</li>
+      <li><b>Destination Namespace:</b> dropdown — default <code>${escapeHtml(w.destinationNamespace || '')}</code></li>
+      <li><b>Destination AppVault:</b> <code>${escapeHtml(w.destinationAppVault || '')}</code></li>
+      <li><b>Storage Class:</b> <code>${escapeHtml(w.defaultStorageClassOnDestination || '')}</code> (default of new destination)</li>
+      <li><b>Snapshot Frequency:</b> Every 1 hour</li>
+    </ul>
+    ${activeMatch
+      ? ''
+      : `<div style="background:#f8d7da;border:1px solid #dc3545;padding:10px;border-radius:4px;margin-top:10px;color:#721c24;">
+           <b>Active profile is <code>${escapeHtml(w.activeProfile)}</code></b> — but the new AMR must be applied on <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code>.
+           Go to <b>Settings</b> and switch the active profile to <code>${escapeHtml(rwizAMR.clusterProfile || '')}</code> before applying the Create form.
+         </div>`}
+    <p style="margin-top:14px;color:#666;font-size:12px;">Press <b>Finish</b> to close this wizard.</p>
+  `;
+}
+</script>
+{% endblock %}

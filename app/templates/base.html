@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Trident Protect{% endblock %} | Trident Protect</title>
+  <link rel="stylesheet" href="/static/css/netapp.css">
+  <script>
+    {% if tp_user %}
+    window.TP_USER = {{ tp_user.user|tojson }};
+    window.TP_ROLE = {{ tp_user.role|tojson }};
+    window.TP_SOURCE = {{ tp_user.source|tojson }};
+    {% else %}
+    window.TP_USER = null;
+    window.TP_ROLE = null;
+    window.TP_SOURCE = null;
+    {% endif %}
+  </script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        Trident Protect
+        <small>
+          v2.0.0 (
+          <span id="tp-trident-version" title="Detecting Trident version…">
+            Trident&nbsp;<span style="opacity:0.6;">…</span>
+          </span>
+          )
+        </small>
+      </div>
+      <ul class="nav">
+        <li><a href="/" class="{% if request.path == '/' %}active{% endif %}">Dashboard</a></li>
+        <li><a href="/applications" class="{% if request.path == '/applications' %}active{% endif %}">Applications</a></li>
+        <li><a href="/backups" class="{% if request.path == '/backups' %}active{% endif %}">Backups</a></li>
+        <li><a href="/snapshots" class="{% if request.path == '/snapshots' %}active{% endif %}">Snapshots</a></li>
+        <li><a href="/schedules" class="{% if request.path == '/schedules' %}active{% endif %}">Schedules</a></li>
+        <li><a href="/disaster-recovery" class="{% if request.path == '/disaster-recovery' %}active{% endif %}">Disaster Recovery</a></li>
+        <li><a href="/restore" class="{% if request.path.startswith('/restore') %}active{% endif %}">Restore</a></li>
+        <li><a href="/settings" class="{% if request.path == '/settings' or '/clusters' in request.path or '/appvaults' in request.path %}active{% endif %}">Settings</a></li>
+        {% if tp_user and tp_user.role == 'admin' %}
+        <li><a href="/logs" class="{% if request.path.startswith('/logs') %}active{% endif %}">Logs</a></li>
+        {% endif %}
+      </ul>
+      <div style="margin-top: auto; font-size: 11px; opacity: 0.6; line-height:1.6; padding-top: 32px;">
+        Powered by NetApp<br>Professional Service Asean Team<br>&amp; Nick R.
+      </div>
+      {% if tp_user %}
+      <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 12px;">
+        <div style="opacity:0.85;">
+          <b id="tp-current-user">{{ tp_user.user }}</b>
+          <span class="badge" style="margin-left:6px;background:{% if tp_user.role == 'admin' %}#008000{% else %}#666{% endif %};color:#fff;border:none;">
+            {{ tp_user.role }}
+          </span>
+        </div>
+        <div style="margin-top:6px;opacity:0.7;font-size:11px;">{{ tp_user.source }}</div>
+        <a href="/logout" style="display:inline-block;margin-top:8px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.4);">Logout</a>
+      </div>
+      {% endif %}
+    </aside>
+    <main class="main">
+      <div id="toast-container"></div>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="/static/js/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

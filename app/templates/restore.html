@@ -1,0 +1,615 @@
+{% extends "base.html" %}
+{% block title %}Restore{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Restore</h1>
+  <div class="subtitle">Restore backups or snapshots (in place or to a different namespace)</div>
+</div>
+
+{# Card 1: Mode radio — picked FIRST #}
+<div class="card">
+  <h2>1. Restore mode</h2>
+  <div class="form-row" style="gap:24px">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="radio" name="restore-mode" value="diff" checked onchange="onModeChange()" />
+      <b>Different namespace</b>
+      <span class="text-muted">(cross-NS: <code>BackupRestore</code> / <code>SnapshotRestore</code>)</span>
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <input type="radio" name="restore-mode" value="inplace" onchange="onModeChange()" />
+      <b>Same namespace — in place</b>
+      <span class="text-muted">(<code>BackupInplaceRestore</code> / <code>SnapshotInplaceRestore</code>)</span>
+    </label>
+  </div>
+</div>
+
+{# Card 2: Source #}
+<div class="card">
+  <h2>2. Source</h2>
+  <div class="filters" style="margin-bottom:12px">
+    <label><span>Namespace</span>
+      <select id="src-ns" onchange="filterItems()"><option value="">-- all namespaces --</option></select>
+    </label>
+    <label style="display:flex;align-items:end;gap:12px;padding-top:18px">
+      <span style="color:#999;font-size:12px">Type</span>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px">
+        <input type="radio" name="src-type" value="Backup" onchange="filterItems()" checked /> Backup
+      </label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px">
+        <input type="radio" name="src-type" value="Snapshot" onchange="filterItems()" /> Snapshot
+      </label>
+    </label>
+  </div>
+  <div id="items-list" style="max-height:300px;overflow-y:auto"></div>
+  <div id="items-empty" style="display:none;color:#999;padding:12px 0">No completed backups or snapshots found.</div>
+</div>
+
+{# Card 3: Destination + auto-filled fields (per mode) #}
+<div class="card">
+  <h2>3. Destination</h2>
+
+  {# Only for cross-NS #}
+  <div id="dest-diff-section">
+    <div class="filters">
+      <label><span>Destination Namespace</span>
+        <select id="dest-ns" onchange="markFormChanged()"></select>
+      </label>
+      <label id="dest-app-row" style="display:none"><span>App Name <span class="text-muted">(optional, Backup only)</span></span>
+        <input id="dest-app" placeholder="auto-fill from source" onchange="markFormChanged()" />
+      </label>
+    </div>
+  </div>
+
+  {# Only for inplace #}
+  <div id="dest-inplace-note" style="display:none;color:#666;font-size:12px;padding:6px 0">
+    <i>Restores in the source namespace. No destination needed.</i>
+  </div>
+
+  {# Auto-filled readonly (always shown) #}
+  <div class="filters" style="margin-top:8px">
+    <label><span>AppVault <span class="text-muted">(auto-filled)</span></span>
+      <input id="src-appvault" readonly style="background:var(--color-surface);font-family:var(--font-mono);" placeholder="(select a source item)" />
+    </label>
+    <label><span>AppArchivePath <span class="text-muted">(auto-filled)</span></span>
+      <input id="src-apparchivepath" readonly style="background:var(--color-surface);font-family:var(--font-mono);" placeholder="(select a source item)" />
+    </label>
+  </div>
+
+</div>
+
+{# Card 4: Restoration (single panel, YAML always visible, no tab) #}
+<div class="card">
+  <h2>4. Restoration</h2>
+  <p class="text-muted">YAML generated from the form selections in the previous steps.</p>
+
+  <div class="form-row" style="margin-top:12px">
+    <label style="flex:1"><span>Generated YAML</span>
+      <textarea id="restore-yaml" rows="18" style="font-family:var(--font-mono);font-size:12px;width:100%;" oninput="onYamlEdited()"></textarea>
+    </label>
+  </div>
+
+  <div class="form-row" style="margin-top:12px">
+    <button class="btn secondary" id="btn-load" onclick="loadYamlFromForm()" title="Regenerate the YAML from the form selections">Load from form</button>
+    <button class="btn secondary" id="btn-validate" onclick="validateRestoreYAML()">Validate</button>
+    <button class="btn" id="btn-restore" onclick="applyRestoreYAML()" title="Run Load from form + Validate first" disabled>Restore</button>
+  </div>
+
+  <div id="restore-yaml-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+</div>
+
+{# Card 5: History (unchanged shape, 4 kinds) #}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0">Restore History</h2>
+    <button class="btn btn-secondary" onclick="loadHistory()" style="font-size:12px;padding:4px 10px">Refresh</button>
+  </div>
+  <div id="history-table"></div>
+  <div id="history-empty" style="display:none;color:#999;padding:12px 0">No restore operations yet.</div>
+</div>
+
+<!-- Detail modal -->
+<div id="detail-overlay" class="modal-overlay" style="display:none" onclick="closeDetail()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:700px">
+    <div class="modal-header">
+      <h2 id="detail-title">Restore Detail</h2>
+      <button class="modal-close" onclick="closeDetail()">&times;</button>
+    </div>
+    <div id="detail-body"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allBackups = [], allSnapshots = [], destNsList = [];
+let allRestoreableByNsName = {};
+
+// v1.4.14: Validation state — Restore button is enabled only after the user clicks
+// Validate and it succeeds. Any form change resets this to false and regenerates the
+// YAML, but does NOT auto-validate (Validate must be clicked explicitly).
+let restoreValidated = false;
+
+function setRestoreButtonState() {
+  const btn = document.getElementById('btn-restore');
+  if (btn) btn.disabled = !restoreValidated;
+}
+
+function onYamlEdited() {
+  // User edited the YAML textarea manually — invalidate any prior validation.
+  // Restore is greyed out until Validate is run again.
+  restoreValidated = false;
+  setRestoreButtonState();
+  const msg = document.getElementById('restore-yaml-msg');
+  if (msg) {
+    msg.textContent = 'YAML modified — re-validate';
+    msg.style.color = 'var(--color-text-muted, #666)';
+  }
+}
+
+function markFormChanged() {
+  // Form changed → invalidate prior validation and regenerate the YAML.
+  // Restore stays disabled until the user clicks Validate (v1.4.14).
+  restoreValidated = false;
+  setRestoreButtonState();
+  loadYamlFromForm();
+  const msg = document.getElementById('restore-yaml-msg');
+  if (msg) {
+    const cb = document.querySelector('.item-cb:checked');
+    msg.textContent = cb
+      ? 'Form changed — click Validate to enable Restore'
+      : 'Select a source item to generate YAML';
+    msg.style.color = 'var(--color-text-muted, #666)';
+  }
+}
+
+async function load() {
+  const [srcRes, destRes] = await Promise.all([
+    tpFetch('/api/restore/sources'),
+    tpFetch('/api/restore/destinations'),
+  ]);
+  const src = await srcRes.json();
+  const dest = await destRes.json();
+  allBackups = src.backups || [];
+  allSnapshots = src.snapshots || [];
+  destNsList = dest.namespaces || [];
+
+  allRestoreableByNsName = {};
+  for (const b of allBackups) {
+    allRestoreableByNsName[`Backup/${b.namespace}/${b.name}`] = b;
+  }
+  for (const s of allSnapshots) {
+    allRestoreableByNsName[`Snapshot/${s.namespace}/${s.name}`] = s;
+  }
+
+  const nsSel = document.getElementById('src-ns');
+  nsSel.innerHTML = '<option value="">-- all namespaces --</option>' +
+    src.namespaces.map(n => `<option value="${n}">${n}</option>`).join('');
+
+  document.getElementById('dest-ns').innerHTML = destNsList.map(n =>
+    `<option value="${n}">${n}</option>`
+  ).join('');
+
+  onModeChange();
+  filterItems();
+  loadHistory();
+  // Initial Restore button state (disabled until validate succeeds)
+  setRestoreButtonState();
+}
+
+function getMode() {
+  return document.querySelector('input[name="restore-mode"]:checked').value;
+}
+
+function getSourceType() {
+  return document.querySelector('input[name="src-type"]:checked').value;
+}
+
+function onModeChange() {
+  const mode = getMode();
+  const isDiff = (mode === 'diff');
+  const isBackup = (getSourceType() === 'Backup');
+  document.getElementById('dest-diff-section').style.display = isDiff ? '' : 'none';
+  document.getElementById('dest-inplace-note').style.display = isDiff ? 'none' : '';
+  // App Name input: only for cross-NS Backup (per the BackupRestore example).
+  // For SnapshotRestore the example has no destinationApplicationName field.
+  document.getElementById('dest-app-row').style.display = (isDiff && isBackup) ? '' : 'none';
+  // Form changed: re-load + re-validate (Restore enabled only on validate success)
+  markFormChanged();
+}
+
+function filterItems() {
+  // When source type changes, the App Name visibility may need to refresh.
+  onModeChange();
+
+  const ns = document.getElementById('src-ns').value;
+  const type = getSourceType();
+  let items;
+  if (type === 'Backup') {
+    items = allBackups.map(b => ({...b, _type: 'Backup'}));
+  } else {
+    items = allSnapshots.map(s => ({...s, _type: 'Snapshot'}));
+  }
+  if (ns) {
+    items = items.filter(i => i.namespace === ns);
+  }
+  const el = document.getElementById('items-list');
+  const empty = document.getElementById('items-empty');
+  if (!items.length) {
+    el.innerHTML = '';
+    empty.style.display = '';
+    updateRestoreBtn();
+    return;
+  }
+  empty.style.display = 'none';
+  const typeColor = type === 'Backup' ? '#60a5fa' : '#a78bfa';
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+  html += '<tr style="border-bottom:1px solid #333;color:#999;text-align:left">'
+    + '<th style="padding:6px 8px;width:30px"></th>'
+    + '<th style="padding:6px 8px">Name</th>'
+    + '<th style="padding:6px 8px">Namespace</th>'
+    + '<th style="padding:6px 8px">App</th>'
+    + '<th style="padding:6px 8px">State</th>'
+    + '<th style="padding:6px 8px">Created</th></tr>';
+  const sorted = items.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+  for (const item of sorted) {
+    const stateBadge = item.stateClass === 'success' ? '🟢'
+      : item.stateClass === 'error' ? '🔴' : '🟡';
+    html += `<tr style="border-bottom:1px solid #222;cursor:pointer" onclick="toggleItem(this)" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}">
+      <td style="padding:6px 8px"><input type="radio" name="restore-item" class="item-cb" data-type="${item._type}" data-ns="${item.namespace}" data-name="${item.name}" data-app="${item.applicationRef||''}" onchange="onItemSelect()" /></td>
+      <td style="padding:6px 8px;font-family:monospace">${item.name}</td>
+      <td style="padding:6px 8px">${item.namespace}</td>
+      <td style="padding:6px 8px">${item.applicationRef||'-'}</td>
+      <td style="padding:6px 8px">${stateBadge} ${item.state}</td>
+      <td style="padding:6px 8px;color:#999">${item.created}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = html;
+  onItemSelect();
+}
+
+function toggleItem(row) {
+  const cb = row.querySelector('.item-cb');
+  cb.checked = !cb.checked;
+  onItemSelect();
+}
+
+function onItemSelect() {
+  const cb = document.querySelector('.item-cb:checked');
+  const btn = document.getElementById('btn-restore');
+  btn.disabled = !cb;
+  if (cb) {
+    const firstApp = cb.dataset.app;
+    // Only auto-fill App Name if the field is currently visible AND empty.
+    const appRow = document.getElementById('dest-app-row');
+    if (appRow.style.display !== 'none' && firstApp && !document.getElementById('dest-app').value) {
+      document.getElementById('dest-app').value = firstApp;
+    }
+    // Auto-fill AppVault + AppArchivePath (always visible, readonly).
+    const key = `${cb.dataset.type}/${cb.dataset.ns}/${cb.dataset.name}`;
+    const src = allRestoreableByNsName[key];
+    if (src) {
+      document.getElementById('src-appvault').value = src.appVaultRef || src.appvault || '';
+      document.getElementById('src-apparchivepath').value = src.appArchivePath || '';
+    }
+  }
+  // (restore-msg span removed in v1.4.10 — selection status shown in the YAML panel via Validate msg)
+  // Form changed: re-load + re-validate (Restore enabled only on validate success)
+  markFormChanged();
+}
+
+function buildRestoreYamlFromForm() {
+  const cb = document.querySelector('.item-cb:checked');
+  if (!cb) return null;
+  const src = allRestoreableByNsName[`${cb.dataset.type}/${cb.dataset.ns}/${cb.dataset.name}`];
+  if (!src) return null;
+
+  const mode = getMode();
+  const type = cb.dataset.type;
+  const isBackup = (type === 'Backup');
+  const kind = mode === 'inplace'
+    ? (isBackup ? 'BackupInplaceRestore'  : 'SnapshotInplaceRestore')
+    : (isBackup ? 'BackupRestore'         : 'SnapshotRestore');
+
+  const name = cb.dataset.name;
+  const ns = cb.dataset.ns;
+  const av = document.getElementById('src-appvault').value || src.appVaultRef || src.appvault || 'ontap-s3-appvault';
+  const ap = document.getElementById('src-apparchivepath').value || src.appArchivePath || '';
+
+  // Per the 4 example YAMLs in /root/example/:
+  //   - BackupRestore:        appArchivePath, appVaultRef, destinationApplicationName (opt), namespaceMapping
+  //   - BackupInplaceRestore: appArchivePath, appVaultRef
+  //   - SnapshotRestore:      appArchivePath, appVaultRef, namespaceMapping
+  //   - SnapshotInplaceRestore: appArchivePath, appVaultRef
+  const spec = { appArchivePath: ap, appVaultRef: av };
+  const destNs = (mode === 'diff') ? (document.getElementById('dest-ns').value || ns) : ns;
+  if (mode === 'diff') {
+    const destApp = document.getElementById('dest-app').value.trim();
+    if (isBackup && destApp) spec.destinationApplicationName = destApp;
+    spec.namespaceMapping = [{source: ns, destination: destNs}];
+  }
+
+  // CR name follows the CLI's default naming convention.
+  const crName = (mode === 'inplace')
+    ? `${isBackup ? 'restore-inplace' : 'snap-inplace'}-${name}`
+    : `${isBackup ? 'restore' : 'snapshot-restore'}-${name}`;
+  return {
+    apiVersion: 'protect.trident.netapp.io/v1',
+    kind,
+    metadata: { name: crName, namespace: (mode === 'inplace') ? ns : destNs },
+    spec,
+  };
+}
+
+function loadYamlFromForm() {
+  const doc = buildRestoreYamlFromForm();
+  const ta = document.getElementById('restore-yaml');
+  if (!doc) {
+    if (ta) ta.value = '';
+    return Promise.resolve(null);
+  }
+  ta.value = dumpYaml(doc);
+  return Promise.resolve(ta.value);
+}
+
+function dumpYaml(obj) {
+  // Minimal YAML serializer (sufficient for the restore CRs we generate).
+  const lines = [];
+  // Inline flow style for arrays of objects, matching the example YAMLs:
+  //   namespaceMapping: [{"source": "...", "destination": "..."}]
+  function flowObj(o) {
+    return '{' + Object.entries(o).map(([kk, vv]) => JSON.stringify(kk) + ': ' + JSON.stringify(vv)).join(', ') + '}';
+  }
+  function flowArr(arr) {
+    return '[' + arr.map(x => (x && typeof x === 'object' && !Array.isArray(x)) ? flowObj(x) : JSON.stringify(x)).join(', ') + ']';
+  }
+  function dump(node, indent) {
+    const pad = ' '.repeat(indent);
+    if (Array.isArray(node)) {
+      if (node.length === 0) return pad + '[]';
+      for (const v of node) {
+        if (v && typeof v === 'object' && !Array.isArray(v)) {
+          const entries = Object.entries(v);
+          lines.push(pad + '-');
+          for (let i = 0; i < entries.length; i++) {
+            const [k, val] = entries[i];
+            const hasChildren = (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length > 0)
+              || (Array.isArray(val) && val.length > 0 && val.some(x => x && typeof x === 'object'));
+            lines.push(pad + '  ' + k + (hasChildren ? ':' : ' ' + (typeof val === 'string' ? quoteIfString(val) : JSON.stringify(val))));
+            if (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length > 0) {
+              dump(val, indent + 4);
+            } else if (Array.isArray(val) && val.length > 0) {
+              if (val.every(x => x && typeof x !== 'object')) {
+                lines[lines.length-1] = pad + '  ' + k + ': [' + val.map(quoteIfString).join(', ') + ']';
+              } else {
+                dump(val, indent + 4);
+              }
+            }
+          }
+        } else {
+          lines.push(pad + '- ' + quoteIfString(v));
+        }
+      }
+    } else if (node && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        const hasChildren = (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0)
+          || (Array.isArray(v) && v.length > 0 && v.some(x => x && typeof x === 'object'));
+        if (Array.isArray(v) && v.length > 0 && v.every(x => x && typeof x === 'object' && !Array.isArray(x))) {
+          lines.push(pad + k + ': ' + flowArr(v));
+        } else if (hasChildren) {
+          lines.push(pad + k + ':');
+          if (Array.isArray(v)) dump(v, indent + 2);
+          else dump(v, indent + 2);
+        } else if (v === null || v === undefined) {
+          lines.push(pad + k + ': null');
+        } else if (typeof v === 'string') {
+          lines.push(pad + k + ': ' + quoteIfString(v));
+        } else {
+          lines.push(pad + k + ': ' + JSON.stringify(v));
+        }
+      }
+    }
+  }
+  dump(obj, 0);
+  return lines.join('\n') + '\n';
+}
+
+function quoteIfString(s) {
+  if (typeof s !== 'string') return JSON.stringify(s);
+  if (/^[A-Za-z0-9_\-./:@%]+$/.test(s) && !['true','false','null','yes','no','on','off'].includes(s.toLowerCase())) {
+    return s;
+  }
+  return JSON.stringify(s);
+}
+
+async function validateRestoreYAML() {
+  const yaml = document.getElementById('restore-yaml').value;
+  const msg = document.getElementById('restore-yaml-msg');
+  restoreValidated = false;
+  setRestoreButtonState();
+  if (!yaml.trim()) {
+    msg.textContent = 'YAML is empty';
+    msg.style.color = 'var(--color-error)';
+    return;
+  }
+  try {
+    const res = await tpFetch('/api/restore/validate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    msg.textContent = r.ok ? `✓ Valid — ${r.message}` : r.message;
+    msg.style.color = r.ok ? 'var(--color-success)' : 'var(--color-error)';
+    restoreValidated = !!r.ok;
+    setRestoreButtonState();
+  } catch (e) {
+    msg.textContent = 'Validate failed: ' + e.message;
+    msg.style.color = 'var(--color-error)';
+    restoreValidated = false;
+    setRestoreButtonState();
+  }
+}
+
+async function applyRestoreYAML() {
+  if (!tpRequireAdmin()) return;
+  if (!restoreValidated) {
+    toast('Run Load from form + Validate first', 'error');
+    return;
+  }
+  const yaml = document.getElementById('restore-yaml').value;
+  if (!yaml.trim()) { toast('YAML is empty', 'error'); return; }
+  if (!confirm(`Apply this YAML?
+
+${yaml.split('\n').slice(0, 6).join('\n')}\n\n(Proceed with restore?)`)) return;
+  try {
+    const res = await tpFetch('/api/restore/apply', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    toast(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) {
+      document.getElementById('restore-yaml-msg').textContent = r.message;
+      document.getElementById('restore-yaml-msg').style.color = 'var(--color-success)';
+      setTimeout(loadHistory, 2000);
+    } else {
+      document.getElementById('restore-yaml-msg').textContent = r.message;
+      document.getElementById('restore-yaml-msg').style.color = 'var(--color-error)';
+    }
+  } catch (e) {
+    toast('Apply failed: ' + e.message, 'error');
+  }
+}
+
+async function loadHistory() {
+  try {
+    const res = await tpFetch('/api/restores');
+    const data = await res.json();
+    const items = data.items || [];
+    const el = document.getElementById('history-table');
+    const empty = document.getElementById('history-empty');
+    if (!items.length) {
+      el.innerHTML = '';
+      empty.style.display = '';
+      return;
+    }
+    empty.style.display = 'none';
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:13px">';
+    html += '<tr style="border-bottom:1px solid #333;color:#999;text-align:left">'
+      + '<th style="padding:6px 8px">Type</th>'
+      + '<th style="padding:6px 8px">Name</th>'
+      + '<th style="padding:6px 8px">Source</th>'
+      + '<th style="padding:6px 8px">Dest NS</th>'
+      + '<th style="padding:6px 8px">State</th>'
+      + '<th style="padding:6px 8px">Age</th>'
+      + '<th style="padding:6px 8px">Actions</th></tr>';
+    for (const r of items) {
+      const stateBadge = r.stateClass === 'success' ? '🟢'
+        : r.stateClass === 'error' ? '🔴' : '🟡';
+      const typeColor = r.type === 'BackupRestore' ? '#60a5fa'
+        : r.type === 'BackupInplaceRestore' ? '#34d399'
+        : r.type === 'SnapshotRestore' ? '#a78bfa'
+        : '#f59e0b';
+      const actions = `<button class="btn btn-secondary" style="font-size:11px;padding:2px 8px;margin-right:4px" onclick="viewRestore('${r.type}','${r.namespace}','${r.name}')">View</button>` +
+        (isAdmin() ? `<button class="btn btn-danger" style="font-size:11px;padding:2px 8px" onclick="deleteRestore('${r.type}','${r.namespace}','${r.name}')">Del</button>` : '');
+      html += `<tr style="border-bottom:1px solid #222">
+        <td style="padding:6px 8px;color:${typeColor}">${r.type}</td>
+        <td style="padding:6px 8px;font-family:monospace">${r.name}</td>
+        <td style="padding:6px 8px;color:#999">${r.sourceRef || '-'}</td>
+        <td style="padding:6px 8px">${r.destinationNamespace || '-'}</td>
+        <td style="padding:6px 8px">${stateBadge} ${r.state}</td>
+        <td style="padding:6px 8px;color:#999">${r.age || ''}</td>
+        <td style="padding:6px 8px">${actions}</td>
+      </tr>`;
+    }
+    html += '</table>';
+    el.innerHTML = html;
+  } catch (e) {
+    console.error('loadHistory failed:', e);
+  }
+}
+
+async function viewRestore(type, namespace, name) {
+  const endpoint = type === 'BackupRestore' || type === 'BackupInplaceRestore'
+    ? `/api/backuprestore/${namespace}/${name}`
+    : `/api/snapshotrestore/${namespace}/${name}`;
+  try {
+    const [jsonRes, yamlRes] = await Promise.all([
+      tpFetch(endpoint + '?format=summary'),
+      tpFetch(endpoint + '?format=yaml'),
+    ]);
+    const r = await jsonRes.json();
+    const yamlText = await yamlRes.text();
+    renderViewRestoreModal(r, yamlText, type);
+    document.getElementById('detail-overlay').style.display = 'flex';
+  } catch (e) {
+    toast('Failed to load restore detail: ' + e.message, 'error');
+  }
+}
+
+function renderViewRestoreModal(r, yamlText, type) {
+  const md = r.metadata || {};
+  const sp = r.spec || {};
+  const st = r.status || {};
+  const typeColor = type === 'BackupRestore' ? '#60a5fa'
+    : type === 'BackupInplaceRestore' ? '#34d399'
+    : type === 'SnapshotRestore' ? '#a78bfa'
+    : '#f59e0b';
+  let html = `<div style="margin-bottom:12px"><span style="background:${typeColor};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">${type}</span></div>`;
+  html += '<h4 style="margin:0 0 8px 0;font-size:13px">Metadata</h4><table style="font-size:13px;width:100%">';
+  html += `<tr><td style="padding:4px 8px;color:#999">Name</td><td style="padding:4px 8px;font-family:monospace">${md.name || '-'}</td></tr>`;
+  html += `<tr><td style="padding:4px 8px;color:#999">Namespace</td><td style="padding:4px 8px">${md.namespace || '-'}</td></tr>`;
+  html += `<tr><td style="padding:4px 8px;color:#999">Created</td><td style="padding:4px 8px">${md.creationTimestamp || '-'}</td></tr>`;
+  html += '</table><h4 style="margin:12px 0 8px 0;font-size:13px">Spec</h4><table style="font-size:13px;width:100%">';
+  html += `<tr><td style="padding:4px 8px;color:#999">AppVault</td><td style="padding:4px 8px;font-family:monospace">${sp.appVaultRef || '-'}</td></tr>`;
+  html += `<tr><td style="padding:4px 8px;color:#999">AppArchivePath</td><td style="padding:4px 8px;font-family:monospace;font-size:12px;word-break:break-all">${sp.appArchivePath || '-'}</td></tr>`;
+  if (sp.destinationApplicationName) {
+    html += `<tr><td style="padding:4px 8px;color:#999">Destination App</td><td style="padding:4px 8px">${sp.destinationApplicationName}</td></tr>`;
+  }
+  if (sp.namespaceMapping) {
+    const nm = Array.isArray(sp.namespaceMapping) ? sp.namespaceMapping : [sp.namespaceMapping];
+    html += `<tr><td style="padding:4px 8px;color:#999">Namespace Mapping</td><td style="padding:4px 8px;font-family:monospace;font-size:12px">${nm.map(m => `${m.source || m[0]} → ${m.destination || m[1]}`).join(', ')}</td></tr>`;
+  }
+  html += '</table>';
+  html += '<h4 style="margin:12px 0 8px 0;font-size:13px">Status</h4><table style="font-size:13px;width:100%">';
+  html += `<tr><td style="padding:4px 8px;color:#999">State</td><td style="padding:4px 8px">${st.state || '-'}</td></tr>`;
+  if (st.error) html += `<tr><td style="padding:4px 8px;color:#999">Error</td><td style="padding:4px 8px;color:var(--color-error)">${st.error}</td></tr>`;
+  html += '</table>';
+  if (yamlText) {
+    html += '<h4 style="margin:12px 0 8px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">Raw YAML <button class="btn secondary small" onclick="navigator.clipboard.writeText(document.getElementById(\'restore-yaml-text\').textContent); toast(\'Copied\',\'success\')">Copy</button></h4>';
+    html += `<pre id="restore-yaml-text" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);">${escapeHtml(yamlText)}</pre>`;
+  }
+  document.getElementById('detail-title').textContent = `${type}: ${md.name || ''}`;
+  document.getElementById('detail-body').innerHTML = html;
+}
+
+function closeDetail() {
+  document.getElementById('detail-overlay').style.display = 'none';
+}
+
+async function deleteRestore(type, namespace, name) {
+  if (!tpRequireAdmin()) return;
+  if (!confirm(`Delete ${type} "${namespace}/${name}"?`)) return;
+  try {
+    const res = await tpFetch(`/api/restore/${encodeURIComponent(type)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {method: 'DELETE'});
+    const r = await res.json();
+    toast(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) loadHistory();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+load();
+</script>
+{% endblock %}

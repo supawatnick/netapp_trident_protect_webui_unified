@@ -1,0 +1,470 @@
+{% extends "base.html" %}
+{% block title %}Backups{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="between">
+    <div>
+      <h1>Backups</h1>
+      <div class="subtitle">All backup CRs across namespaces</div>
+    </div>
+    {% if tp_user and tp_user.role == 'admin' %}
+    <button class="btn small" onclick="showAddBackupModal()">+ Add Backup</button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="filters">
+    <label><span>Namespace</span>
+      <select id="filter-ns">
+        <option value="">All namespaces</option>
+      </select>
+    </label>
+    <label><span>Search</span><input id="filter-q" placeholder="name…" /></label>
+    <button class="btn small" onclick="render()">Apply</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Namespace</th>
+          <th>Name</th>
+          <th>Application</th>
+          <th>Schedule Source</th>
+          <th>Reclaim Policy</th>
+          <th>State</th>
+          <th>Created</th>
+          <th>Age</th>
+          <th>Error</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="backups-tbody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add Backup Modal (Form + YAML) -->
+<div id="add-backup-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideAddBackupModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:700px;">
+    <h3>Add Backup</h3>
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
+      <button class="form-tab active" id="add-backup-tab-form" onclick="switchBackupTab('form')">Form</button>
+      <button class="form-tab" id="add-backup-tab-yaml" onclick="switchBackupTab('yaml')">YAML</button>
+    </div>
+
+    <!-- FORM TAB -->
+    <div id="add-backup-form-tab">
+      <div class="form-row">
+        <label><span>Name <span class="text-muted">(optional, auto-generated)</span></span>
+          <input id="add-backup-name" placeholder="manual-2026-07-25-..." />
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Namespace</span><select id="add-backup-ns" onchange="loadBackupApps()"></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>Application</span><select id="add-backup-app"></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>AppVault</span><select id="add-backup-vault"></select></label>
+      </div>
+      <div class="form-row">
+        <label><input type="checkbox" id="add-backup-full" /> <span>Full Backup <span class="text-muted">(non-incremental)</span></span></label>
+      </div>
+    </div>
+
+    <!-- YAML TAB -->
+    <div id="add-backup-yaml-tab" style="display:none">
+      <p class="text-muted">Edit the Backup YAML manifest. Will be applied to the active cluster context.</p>
+      <textarea id="backup-yaml" rows="14" style="font-family:var(--font-mono);font-size:13px;width:100%;"></textarea>
+    </div>
+
+    <div id="add-backup-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideAddBackupModal()">Cancel</button>
+      <button class="btn secondary" onclick="validateBackupYAML()">Validate</button>
+      <button class="btn" onclick="applyBackupYAML()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- View Backup Modal -->
+<div id="view-backup-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideViewBackupModal()">
+  <div class="modal" style="max-width:800px;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
+    <div class="between">
+      <h3>Backup: <span id="vb-name">—</span></h3>
+      <button class="btn secondary small" onclick="hideViewBackupModal()">Close</button>
+    </div>
+
+    <h4 style="margin-top:16px;">Metadata</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Namespace</b></td><td id="vb-namespace">—</td></tr>
+        <tr><td><b>Created</b></td><td id="vb-created">—</td></tr>
+        <tr><td><b>Labels</b></td><td id="vb-labels">—</td></tr>
+        <tr><td><b>UID</b></td><td id="vb-uid">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Spec</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Application</b></td><td id="vb-appref">—</td></tr>
+        <tr><td><b>AppVault</b></td><td id="vb-appvault">—</td></tr>
+        <tr><td><b>Reclaim Policy</b></td><td id="vb-reclaim">—</td></tr>
+        <tr><td><b>Data Mover</b></td><td id="vb-datamover">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Status</h4>
+    <table>
+      <tbody>
+        <tr><td><b>State</b></td><td id="vb-state">—</td></tr>
+        <tr><td><b>App Archive Path</b></td><td id="vb-archive-path" style="font-family:var(--font-mono);font-size:12px;word-break:break-all;">—</td></tr>
+        <tr><td><b>Completion Time</b></td><td id="vb-completion">—</td></tr>
+        <tr><td><b>Error</b></td><td id="vb-error">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Conditions</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="vb-conditions-body">
+          <tr><td colspan="4" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+      Raw YAML
+      <button class="btn secondary small" onclick="copyBackupYAML()">Copy</button>
+    </h4>
+    <pre id="vb-yaml" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);"></pre>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let backups = [];
+async function loadNamespaces() {
+  try {
+    const res = await fetch('/api/namespaces');
+    const data = await res.json();
+    const items = (data.items || []).sort((a, b) => a.name.localeCompare(b.name));
+    const select = document.getElementById('filter-ns');
+    for (const ns of items) {
+      const opt = document.createElement('option');
+      opt.value = ns.name;
+      opt.textContent = ns.name;
+      select.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('Failed to load namespaces:', e);
+  }
+}
+
+async function loadBackups() {
+  const res = await fetch('/api/backups');
+  const data = await res.json();
+  backups = data.items || [];
+  render();
+}
+function render() {
+  const nsF = document.getElementById('filter-ns').value.toLowerCase();
+  const q = document.getElementById('filter-q').value.toLowerCase();
+  const rows = backups.filter(b =>
+    (!nsF || b.namespace === nsF) &&
+    (!q || b.name.toLowerCase().includes(q))
+  );
+  document.getElementById('backups-tbody').innerHTML = rows.map(b => `
+    <tr>
+      <td>${escapeHtml(b.namespace)}</td>
+      <td><b>${escapeHtml(b.name)}</b></td>
+      <td>${escapeHtml(b.applicationRef || '—')}</td>
+      <td>${escapeHtml(b.scheduleSource || 'on-demand')}</td>
+      <td>${escapeHtml(b.reclaimPolicy || '—')}</td>
+      <td>${stateBadge(b.state)}</td>
+      <td>${escapeHtml(b.created)}</td>
+      <td>${escapeHtml(b.age)}</td>
+      <td class="text-muted">${escapeHtml(b.error || '—')}</td>
+      <td>
+        <button class="btn small secondary" onclick="viewBackup('${escapeHtml(b.namespace)}','${escapeHtml(b.name)}')">View</button>
+        ${isAdmin() ? `<button class="btn small danger" onclick="deleteBackup('${escapeHtml(b.namespace)}','${escapeHtml(b.name)}')">Del</button>` : ''}
+      </td>
+    </tr>
+  `).join('') || `<tr><td colspan="10" class="empty">No matches</td></tr>`;
+}
+async function deleteBackup(ns, name) {
+  if (!tpRequireAdmin()) return;
+  if (!confirm(`Delete backup ${ns}/${name}?\nNote: reclaimPolicy=Retain → data stays in S3`)) return;
+  const res = await fetch(`/api/backup/${ns}/${name}`, {method:'DELETE'});
+  const r = await res.json();
+  toast(r.ok ? 'Deleted' : 'Failed: '+r.message, r.ok ? 'success' : 'error');
+  loadBackups();
+}
+
+// ---- Add Backup modal ----
+const DEFAULT_BACKUP_YAML = `apiVersion: protect.trident.netapp.io/v1
+kind: Backup
+metadata:
+  name: ondemand-backup
+  namespace: trident-protect-1
+spec:
+  applicationRef: nginx-protect-app
+  appVaultRef: ontap-s3-appvault
+  reclaimPolicy: Retain`;
+
+function switchBackupTab(tab) {
+  const isForm = tab === 'form';
+  document.getElementById('add-backup-form-tab').style.display = isForm ? '' : 'none';
+  document.getElementById('add-backup-yaml-tab').style.display = isForm ? 'none' : '';
+  document.getElementById('add-backup-tab-form').classList.toggle('active', isForm);
+  document.getElementById('add-backup-tab-yaml').classList.toggle('active', !isForm);
+  if (!isForm) {
+    document.getElementById('backup-yaml').value = buildBackupYamlFromForm();
+  }
+}
+
+function buildBackupYamlFromForm() {
+  const name = document.getElementById('add-backup-name').value.trim()
+    || `manual-${new Date().toISOString().replace(/[:.]/g,'').slice(0,15).toLowerCase()}`;
+  const ns = document.getElementById('add-backup-ns').value || 'trident-protect';
+  const app = document.getElementById('add-backup-app').value || 'my-app';
+  const vault = document.getElementById('add-backup-vault').value || 'ontap-s3-appvault';
+  const full = document.getElementById('add-backup-full').checked;
+  let yaml = `apiVersion: protect.trident.netapp.io/v1
+kind: Backup
+metadata:
+  name: ${name}
+  namespace: ${ns}
+spec:
+  applicationRef: ${app}
+  appVaultRef: ${vault}
+  reclaimPolicy: Retain`;
+  if (full) yaml += '\n  fullBackup: true';
+  return yaml;
+}
+
+async function loadBackupApps() {
+  const ns = document.getElementById('add-backup-ns').value;
+  const sel = document.getElementById('add-backup-app');
+  if (!ns) { sel.innerHTML = '<option value="">—</option>'; return; }
+  try {
+    const res = await fetch(`/api/applications?namespace=${encodeURIComponent(ns)}`);
+    const data = await res.json();
+    const apps = data.items || [];
+    sel.innerHTML = apps.length
+      ? apps.map(a => `<option value="${a.name}">${a.name}</option>`).join('')
+      : '<option value="">No apps in this ns</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function loadAppVaults() {
+  const sel = document.getElementById('add-backup-vault');
+  try {
+    const res = await fetch('/api/appvaults');
+    const data = await res.json();
+    const vaults = data.items || [];
+    sel.innerHTML = vaults.length
+      ? vaults.map(v => `<option value="${v.name}">${v.name} (${v.namespace})</option>`).join('')
+      : '<option value="">No appvaults found</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function showAddBackupModal() {
+  document.getElementById('add-backup-msg').textContent = '';
+  document.getElementById('add-backup-msg').style.color = '';
+  document.getElementById('add-backup-name').value = '';
+  document.getElementById('add-backup-full').checked = false;
+  await populateNsDropdown('add-backup-ns');
+  await loadBackupApps();
+  await loadAppVaults();
+  document.getElementById('backup-yaml').value = DEFAULT_BACKUP_YAML;
+  switchBackupTab('form');
+  document.getElementById('add-backup-modal').style.display = 'flex';
+}
+function hideAddBackupModal() {
+  document.getElementById('add-backup-modal').style.display = 'none';
+}
+function getBackupYaml() {
+  const formTab = document.getElementById('add-backup-form-tab');
+  if (formTab.style.display !== 'none') {
+    return buildBackupYamlFromForm();
+  }
+  return document.getElementById('backup-yaml').value.trim();
+}
+async function validateBackupYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getBackupYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  try {
+    const res = await fetch('/api/backup/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); }
+}
+async function applyBackupYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getBackupYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  let v;
+  try {
+    const vRes = await fetch('/api/backup/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    v = await vRes.json();
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); return; }
+  if (!v.ok) { showAddMsg('Invalid: ' + v.message, 'error'); return; }
+  if (!confirm(v.message + '\n\nApply now?')) return;
+  try {
+    const res = await fetch('/api/backup/apply', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) {
+      setTimeout(() => { hideAddBackupModal(); loadBackups(); }, 1000);
+    }
+  } catch (e) { showAddMsg('Apply failed: ' + e.message, 'error'); }
+}
+function showAddMsg(text, kind) {
+  const el = document.getElementById('add-backup-msg');
+  el.textContent = text;
+  el.style.color = kind === 'error' ? 'var(--color-error)' : kind === 'success' ? 'var(--color-success)' : 'var(--color-text-muted, #666)';
+  el.style.fontSize = '13px';
+}
+
+// ---- View Backup modal ----
+async function viewBackup(ns, name) {
+  try {
+    const [jsonRes, yamlRes] = await Promise.all([
+      fetch(`/api/backup/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
+      fetch(`/api/backup/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
+    ]);
+    if (!jsonRes.ok) throw new Error(`HTTP ${jsonRes.status}`);
+    const b = await jsonRes.json();
+    const yamlText = await yamlRes.text();
+    renderViewBackupModal(b, yamlText);
+    document.getElementById('view-backup-modal').style.display = 'flex';
+  } catch (e) {
+    toast('Failed to load: ' + e.message, 'error');
+  }
+}
+
+function renderViewBackupModal(b, yamlText) {
+  const md = b.metadata || {};
+  const sp = b.spec || {};
+  const st = b.status || {};
+  const cn = md.creationTimestamp || '';
+
+  document.getElementById('vb-name').textContent = md.name || '—';
+  document.getElementById('vb-namespace').textContent = md.namespace || '—';
+  document.getElementById('vb-created').textContent = cn ? `${formatTime(cn)} (${formatAge(cn)})` : '—';
+  document.getElementById('vb-uid').textContent = md.uid || '—';
+
+  const labels = md.labels || {};
+  document.getElementById('vb-labels').textContent = Object.keys(labels).length
+    ? Object.entries(labels).map(([k,v]) => `${k}=${v}`).join(', ')
+    : '—';
+
+  document.getElementById('vb-appref').textContent = sp.applicationRef || '—';
+  document.getElementById('vb-appvault').textContent = sp.appVaultRef || '—';
+  document.getElementById('vb-reclaim').textContent = sp.reclaimPolicy || '—';
+  document.getElementById('vb-datamover').textContent = sp.dataMover || '—';
+
+  document.getElementById('vb-state').innerHTML = stateBadge(st.state || 'Unknown');
+  document.getElementById('vb-archive-path').textContent = st.appArchivePath || '—';
+  document.getElementById('vb-completion').textContent = st.completionTimestamp
+    ? `${formatTime(st.completionTimestamp)} (${formatAge(st.completionTimestamp)})`
+    : '—';
+  document.getElementById('vb-error').textContent = st.error || '—';
+  document.getElementById('vb-error').style.color = st.error ? 'var(--color-error)' : '';
+
+  const conds = st.conditions || [];
+  document.getElementById('vb-conditions-body').innerHTML = conds.length === 0
+    ? '<tr><td colspan="4" class="empty">No conditions</td></tr>'
+    : conds.map(c => `
+        <tr>
+          <td>${escapeHtml(c.type || '—')}</td>
+          <td>${escapeHtml(c.status || '—')}</td>
+          <td>${escapeHtml(c.reason || '—')}</td>
+          <td>${escapeHtml(c.message || '—')}</td>
+        </tr>
+      `).join('');
+
+  document.getElementById('vb-yaml').textContent = yamlText;
+}
+
+function hideViewBackupModal() {
+  document.getElementById('view-backup-modal').style.display = 'none';
+}
+
+async function copyBackupYAML() {
+  const text = document.getElementById('vb-yaml').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied to clipboard', 'success');
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('Copied (fallback)', 'success'); }
+    catch (_) { toast('Copy failed', 'error'); }
+    document.body.removeChild(ta);
+  }
+}
+
+// ---- Helpers ----
+function formatTime(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toISOString().replace('T', ' ').slice(0, 19);
+  } catch (_) { return ts; }
+}
+
+function formatAge(ts) {
+  try {
+    const d = new Date(ts);
+    const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec/60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec/3600) + 'h ago';
+    return Math.floor(sec/86400) + 'd ago';
+  } catch (_) { return ''; }
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+document.getElementById('filter-ns').addEventListener('change', render);
+document.getElementById('filter-q').addEventListener('input', render);
+loadNamespaces();
+loadBackups();
+</script>
+{% endblock %}

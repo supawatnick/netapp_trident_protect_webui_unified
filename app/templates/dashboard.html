@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Dashboard</h1>
+  <div class="subtitle">Trident Protect resources across all namespaces</div>
+</div>
+
+<div id="stats" class="stats">
+  <div class="stat"><div class="value" id="stat-apps">—</div><div class="label">Applications</div></div>
+  <div class="stat success"><div class="value" id="stat-protected">—</div><div class="label">Protected</div></div>
+  <div class="stat warning"><div class="value" id="stat-partial">—</div><div class="label">Partial</div></div>
+  <div class="stat error"><div class="value" id="stat-unprotected">—</div><div class="label">Unprotected</div></div>
+  <div class="stat"><div class="value" id="stat-backups">—</div><div class="label">Backups</div></div>
+  <div class="stat"><div class="value" id="stat-snapshots">—</div><div class="label">Snapshots</div></div>
+  <div class="stat success"><div class="value" id="stat-schedules">—</div><div class="label">Schedules</div></div>
+  <div class="stat error"><div class="value" id="stat-failed">—</div><div class="label">Failed</div></div>
+</div>
+
+<div class="card">
+  <div class="between mb-1">
+    <h2>Applications</h2>
+    <button class="btn small secondary" onclick="loadDashboard()">Refresh</button>
+  </div>
+  <div class="table-wrap">
+    <table id="apps-table">
+      <thead>
+        <tr>
+          <th>Namespace</th>
+          <th>Name</th>
+          <th>Protection</th>
+          <th>Resources</th>
+          <th>Storage</th>
+          <th>Age</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

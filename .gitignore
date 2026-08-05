@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.web.pid
+web.log
+config.yaml
+.DS_Store
+bin/
+.venv/
+logs/
+dist/
+*.egg-info/
+.env
+deploy/
+auth_users.json

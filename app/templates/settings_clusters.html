@@ -1,0 +1,161 @@
+{% extends "settings_base.html" %}
+{% block settings_content %}
+
+<div id="profile-limit-banner" class="card" style="display:none;background:#fff8e6;border-color:var(--color-warning);margin-bottom:16px;">
+</div>
+
+<div class="card">
+  <div class="between mb-1">
+    <h2>Current Connection</h2>
+    <button class="btn small" onclick="testConnection()">Test</button>
+  </div>
+    <table>
+    <tbody>
+      <tr><td><b>User</b></td><td id="whoami-user">—</td></tr>
+      <tr><td><b>Server</b></td><td id="whoami-server">—</td></tr>
+      <tr><td><b>Cluster</b></td><td id="ocp-cluster-name">—</td></tr>
+      <tr><td><b>Active profile</b></td><td id="active-profile">—</td></tr>
+      <tr><td><b>Token (preview)</b></td>
+          <td id="token-preview">
+            <span class="text-mono">—</span>
+            <button class="btn small secondary" onclick="showFullToken()" style="margin-left:8px;">Show full</button>
+          </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2 style="cursor:pointer" onclick="toggleHelp()">
+    How to register a new Kubernetes cluster?
+    <span id="help-toggle" style="float:right;font-size:14px;">▼</span>
+  </h2>
+  <div id="help-content" style="display:none;margin-top:16px;">
+
+    <h3>Method A — Bearer token (api_url + token)</h3>
+    <p class="text-muted">Create a service account token on the target cluster:</p>
+    <pre><code>kubectl -n kube-system create serviceaccount k8s-ui-sa
+kubectl create clusterrolebinding k8s-ui-binding \
+  --clusterrole=cluster-admin --serviceaccount=kube-system:k8s-ui-sa
+kubectl -n kube-system create token k8s-ui-sa --duration=87600h</code></pre>
+    <p class="text-muted">Then in this UI:</p>
+    <ol>
+      <li>Click <b>"+ Add Profile"</b> below</li>
+      <li>Fill in Profile Name + API URL, then click <b>Save Profile</b></li>
+      <li>Click <b>"Login &amp; Switch"</b> on the new profile row</li>
+      <li>Paste the bearer token, then click <b>"Login &amp; Switch"</b> again</li>
+    </ol>
+
+    <h3>Method B — Import kubeconfig file</h3>
+    <ol>
+      <li>Click <b>"Import Kubeconfig"</b> at the bottom of this page</li>
+      <li>Paste a kubeconfig YAML (or upload a file)</li>
+      <li>A profile is auto-created from the kubeconfig's <code>current-context</code></li>
+    </ol>
+    <p class="text-muted">After import, click <b>"Login &amp; Switch"</b> on the new row to activate it.</p>
+
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="cursor:pointer" onclick="toggleKubeconfig()">
+    Import Kubeconfig
+    <span id="kubeconfig-toggle" style="float:right;font-size:14px;">▼</span>
+  </h2>
+  <div id="kubeconfig-content" style="display:none;margin-top:12px;">
+    <p class="text-muted">
+      Use this to connect to a vanilla Kubernetes cluster by pasting its
+      <code>kubeconfig</code> file. The kubeconfig will be merged into
+      <code>~/.kube/config</code> (a backup of any existing file is made first
+      as <code>~/.kube/config.bak</code>), and a new cluster profile will be
+      created automatically from the <code>current-context</code>.
+    </p>
+    <div class="form-row" style="margin-top:12px;">
+      <label><span>Kubeconfig YAML</span>
+        <textarea id="kubeconfig-text" rows="10" style="font-family:var(--font-mono);font-size:12px;width:100%;" placeholder="apiVersion: v1&#10;kind: Config&#10;clusters:&#10;- cluster:&#10;    server: https://api.k8s-cluster:6443&#10;  name: my-cluster&#10;users:&#10;- user:&#10;    token: eyJhbGciOi...&#10;  name: my-user&#10;contexts:&#10;- context:&#10;    cluster: my-cluster&#10;    user: my-user&#10;  name: my-context&#10;current-context: my-context"></textarea>
+      </label>
+    </div>
+    <div class="form-row" style="display:flex;align-items:center;gap:8px;">
+      <input type="file" id="kubeconfig-file" accept=".yaml,.yml,.conf,application/x-yaml,text/yaml" style="font-size:13px;" />
+      <button class="btn secondary small" onclick="loadKubeconfigFile()">Load File</button>
+      <button class="btn" onclick="importKubeconfig()">Apply Kubeconfig</button>
+    </div>
+    <div id="kubeconfig-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+    <div id="kubeconfig-preview" style="display:none;margin-top:12px;background:#f7f7f7;padding:10px;border-radius:6px;font-size:13px;"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="between mb-1">
+    <h2>Cluster Profiles</h2>
+    {% if tp_user and tp_user.role == 'admin' %}
+    <button class="btn small" onclick="showAddForm()">+ Add Profile</button>
+    {% endif %}
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>API URL</th>
+          <th>Description</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="profiles-tbody">
+        <tr><td colspan="5" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add/Edit Profile Form -->
+<div id="profile-form" style="display:none;" class="card">
+  <h2 id="profile-form-title">Add Profile</h2>
+  <div class="form-row">
+    <label><span>Profile Name</span><input id="pf-name" placeholder="clus1" /></label>
+    <label><span>Description</span><input id="pf-description" placeholder="Optional" /></label>
+  </div>
+  <div class="form-row">
+    <label><span>API URL</span><input id="pf-api-url" placeholder="https://10.10.10.41:6443" /></label>
+  </div>
+  <div class="form-row">
+    <label><span>Skip TLS Verify</span>
+      <select id="pf-insecure">
+        <option value="true">Yes (self-signed cert)</option>
+        <option value="false">No (production)</option>
+      </select>
+    </label>
+  </div>
+  <div class="form-row">
+    <button class="btn" onclick="saveProfile()">Save Profile</button>
+    <button class="btn secondary" onclick="hideProfileForm()">Cancel</button>
+  </div>
+</div>
+
+<!-- Login Form (Bearer Token only — k8s has no password auth) -->
+<div id="login-form" style="display:none;" class="card">
+  <h2>Login to <span id="login-profile-name">—</span></h2>
+  <p class="text-muted">
+    Paste a bearer token for this cluster. The token is stored in the profile
+    and used to write a kubeconfig entry on this host, so subsequent
+    <code>kubectl</code> commands target the right cluster.
+  </p>
+
+  <h3>Bearer Token</h3>
+  <div class="form-row">
+    <label><span>Bearer Token</span><input id="login-token" placeholder="eyJhbGciOi..." autocomplete="off" /></label>
+  </div>
+  <div class="form-row">
+    <button class="btn" onclick="loginWithToken()">Login &amp; Switch</button>
+  </div>
+
+  <div class="form-row" style="margin-top:16px;">
+    <button class="btn secondary" onclick="hideLoginForm()">Cancel</button>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/settings.js"></script>
+{% endblock %}

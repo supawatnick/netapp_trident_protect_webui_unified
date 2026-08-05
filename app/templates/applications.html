@@ -1,0 +1,472 @@
+{% extends "base.html" %}
+{% block title %}Applications{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="between">
+    <div>
+      <h1>Applications</h1>
+      <div class="subtitle">Protected applications and their protection state</div>
+    </div>
+    {% if tp_user and tp_user.role == 'admin' %}
+    <button class="btn small" onclick="showAddAppModal()">+ Add Application</button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="filters">
+    <label><span>Namespace</span>
+      <select id="filter-ns">
+        <option value="">All namespaces</option>
+      </select>
+    </label>
+    <label><span>Search</span><input id="filter-q" placeholder="name…" /></label>
+    <button class="btn small" onclick="render()">Apply</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Namespace</th>
+          <th>Name</th>
+          <th>Protection</th>
+          <th>Health</th>
+          <th>Resources</th>
+          <th>Storage</th>
+          <th>Details</th>
+          <th>Age</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="apps-tbody"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add Application Modal (Form + YAML) -->
+<div id="add-app-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideAddAppModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:700px;">
+    <h3>Add Application</h3>
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
+      <button class="form-tab active" id="add-app-tab-form" onclick="switchAppTab('form')">Form</button>
+      <button class="form-tab" id="add-app-tab-yaml" onclick="switchAppTab('yaml')">YAML</button>
+    </div>
+
+    <!-- FORM TAB -->
+    <div id="add-app-form-tab">
+      <div class="form-row">
+        <label><span>Name</span><input id="add-app-name" placeholder="my-app" /></label>
+      </div>
+      <div class="form-row">
+        <label><span>Namespace</span><select id="add-app-ns"></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>Labels <span class="text-muted">(optional, key=value per line)</span></span>
+          <textarea id="add-app-labels" rows="2" placeholder="app=myapp&#10;tier=frontend"></textarea>
+        </label>
+      </div>
+    </div>
+
+    <!-- YAML TAB -->
+    <div id="add-app-yaml-tab" style="display:none">
+      <p class="text-muted">Edit the Application YAML manifest. Will be applied to the active cluster context.</p>
+      <textarea id="app-yaml" rows="14" style="font-family:var(--font-mono);font-size:13px;width:100%;"></textarea>
+    </div>
+
+    <div id="add-app-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideAddAppModal()">Cancel</button>
+      <button class="btn secondary" onclick="validateAppYAML()">Validate</button>
+      <button class="btn" onclick="applyAppYAML()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- View Application Modal -->
+<div id="view-app-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideViewAppModal()">
+  <div class="modal" style="max-width:800px;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
+    <div class="between">
+      <h3>Application: <span id="va-name">—</span></h3>
+      <button class="btn secondary small" onclick="hideViewAppModal()">Close</button>
+    </div>
+
+    <h4 style="margin-top:16px;">Metadata</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Namespace</b></td><td id="va-namespace">—</td></tr>
+        <tr><td><b>Created</b></td><td id="va-created">—</td></tr>
+        <tr><td><b>Labels</b></td><td id="va-labels">—</td></tr>
+        <tr><td><b>UID</b></td><td id="va-uid">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Status</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Protection</b></td><td id="va-protection">—</td></tr>
+        <tr><td><b>Health</b></td><td id="va-health">—</td></tr>
+        <tr><td><b>Resources</b></td><td id="va-resources">—</td></tr>
+        <tr><td><b>Storage</b></td><td id="va-storage">—</td></tr>
+        <tr><td><b>Used</b></td><td id="va-storage-used">—</td></tr>
+        <tr><td><b>Details</b></td><td id="va-details">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Spec</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Included namespaces</b></td><td id="va-included">—</td></tr>
+        <tr><td><b>Resource filter</b></td><td id="va-resource-filter">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Conditions</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="va-conditions-body">
+          <tr><td colspan="4" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+      Raw YAML
+      <button class="btn secondary small" onclick="copyAppYAML()">Copy</button>
+    </h4>
+    <pre id="va-yaml" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);"></pre>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let apps = [];
+async function loadNamespaces() {
+  try {
+    const res = await fetch('/api/namespaces');
+    const data = await res.json();
+    const items = (data.items || []).sort((a, b) => a.name.localeCompare(b.name));
+    const select = document.getElementById('filter-ns');
+    for (const ns of items) {
+      const opt = document.createElement('option');
+      opt.value = ns.name;
+      opt.textContent = ns.name;
+      select.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('Failed to load namespaces:', e);
+  }
+}
+
+async function loadApps() {
+  const res = await fetch('/api/applications');
+  const data = await res.json();
+  apps = data.items || [];
+  render();
+}
+async function deleteApplication(ns, name) {
+  if (!tpRequireAdmin()) return;
+  if (!confirm(`Delete application ${ns}/${name}?\nThis will remove the Application CR.`)) return;
+  try {
+    const res = await fetch(`/api/application/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`, {method:'DELETE'});
+    const r = await res.json();
+    toast(r.ok ? 'Deleted' : 'Failed: '+r.message, r.ok ? 'success' : 'error');
+    if (r.ok) loadApps();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+function render() {
+  const nsF = document.getElementById('filter-ns').value;
+  const q = document.getElementById('filter-q').value.toLowerCase();
+  const rows = apps.filter(a =>
+    (!nsF || a.namespace === nsF) &&
+    (!q || a.name.toLowerCase().includes(q) || a.namespace.toLowerCase().includes(q))
+  );
+  document.getElementById('apps-tbody').innerHTML = rows.map(a => `
+    <tr>
+      <td>${escapeHtml(a.namespace)}</td>
+      <td><b>${escapeHtml(a.name)}</b></td>
+      <td>${stateBadge(a.protectionState)}</td>
+      <td>${escapeHtml(a.protectionHealthState || '—')}</td>
+      <td>${a.resourceCount}</td>
+      <td>${escapeHtml(a.storageHuman)}</td>
+      <td class="text-muted">${escapeHtml((a.details || []).join(', ') || '—')}</td>
+      <td>${escapeHtml(a.age)}</td>
+      <td>
+        <button class="btn small secondary" onclick="viewApplication('${escapeHtml(a.namespace)}','${escapeHtml(a.name)}')">View</button>
+        ${isAdmin() ? `<button class="btn small danger" onclick="deleteApplication('${escapeHtml(a.namespace)}','${escapeHtml(a.name)}')">Del</button>` : ''}
+      </td>
+    </tr>
+  `).join('') || `<tr><td colspan="9" class="empty">No matches</td></tr>`;
+}
+
+// ---- Add Application modal ----
+const DEFAULT_APP_YAML = `apiVersion: protect.trident.netapp.io/v1
+kind: Application
+metadata:
+  name: my-app
+  namespace: my-app-ns
+spec:
+  includedNamespaces:
+    - namespace: my-app-ns`;
+
+function switchAppTab(tab) {
+  const isForm = tab === 'form';
+  document.getElementById('add-app-form-tab').style.display = isForm ? '' : 'none';
+  document.getElementById('add-app-yaml-tab').style.display = isForm ? 'none' : '';
+  document.getElementById('add-app-tab-form').classList.toggle('active', isForm);
+  document.getElementById('add-app-tab-yaml').classList.toggle('active', !isForm);
+  if (!isForm) {
+    document.getElementById('app-yaml').value = buildAppYamlFromForm();
+  }
+}
+
+function buildAppYamlFromForm() {
+  const name = document.getElementById('add-app-name').value.trim() || 'my-app';
+  const ns = document.getElementById('add-app-ns').value || 'my-app-ns';
+  const labelsRaw = document.getElementById('add-app-labels').value.trim();
+  let metaLabels = '';
+  if (labelsRaw) {
+    const labels = {};
+    labelsRaw.split('\n').forEach(line => {
+      const [k, v] = line.split('=').map(s => s.trim());
+      if (k && v) labels[k] = v;
+    });
+    if (Object.keys(labels).length) {
+      metaLabels = '\n  labels:\n' + Object.entries(labels)
+        .map(([k, v]) => `    ${k}: "${v}"`).join('\n');
+    }
+  }
+  return `apiVersion: protect.trident.netapp.io/v1
+kind: Application
+metadata:
+  name: ${name}
+  namespace: ${ns}${metaLabels}
+spec:
+  includedNamespaces:
+    - namespace: ${ns}`;
+}
+
+function parseAppYamlToForm(yamlStr) {
+  try {
+    const lines = yamlStr.split('\n');
+    let name = '', ns = '';
+    const labels = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^\s*name:\s*(.+)$/);
+      if (m && !name) name = m[1].trim();
+      const m2 = lines[i].match(/^\s*namespace:\s*(.+)$/);
+      if (m2 && !ns) ns = m2[1].trim();
+      const m3 = lines[i].match(/^\s{4}(\S+):\s*"?([^"]+)"?\s*$/);
+      if (m3) labels.push(`${m3[1]}=${m3[2]}`);
+    }
+    document.getElementById('add-app-name').value = name || '';
+    if (ns) document.getElementById('add-app-ns').value = ns;
+    if (labels.length) document.getElementById('add-app-labels').value = labels.join('\n');
+  } catch (e) { /* ignore parse errors */ }
+}
+
+async function showAddAppModal() {
+  document.getElementById('add-app-msg').textContent = '';
+  document.getElementById('add-app-msg').style.color = '';
+  document.getElementById('add-app-name').value = '';
+  document.getElementById('add-app-labels').value = '';
+  await populateNsDropdown('add-app-ns');
+  document.getElementById('app-yaml').value = DEFAULT_APP_YAML;
+  switchAppTab('form');
+  document.getElementById('add-app-modal').style.display = 'flex';
+}
+
+function hideAddAppModal() {
+  document.getElementById('add-app-modal').style.display = 'none';
+}
+function getAppYaml() {
+  const formTab = document.getElementById('add-app-form-tab');
+  if (formTab.style.display !== 'none') {
+    return buildAppYamlFromForm();
+  }
+  return document.getElementById('app-yaml').value.trim();
+}
+
+async function validateAppYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getAppYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  try {
+    const res = await fetch('/api/application/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); }
+}
+async function applyAppYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getAppYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  let v;
+  try {
+    const vRes = await fetch('/api/application/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    v = await vRes.json();
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); return; }
+  if (!v.ok) { showAddMsg('Invalid: ' + v.message, 'error'); return; }
+  if (!confirm(v.message + '\n\nApply now?')) return;
+  try {
+    const res = await fetch('/api/application/apply', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) {
+      setTimeout(() => { hideAddAppModal(); loadApps(); }, 1000);
+    }
+  } catch (e) { showAddMsg('Apply failed: ' + e.message, 'error'); }
+}
+function showAddMsg(text, kind) {
+  const el = document.getElementById('add-app-msg');
+  el.textContent = text;
+  el.style.color = kind === 'error' ? 'var(--color-error)' : kind === 'success' ? 'var(--color-success)' : 'var(--color-text-muted, #666)';
+  el.style.fontSize = '13px';
+}
+
+// ---- View Application modal ----
+async function viewApplication(ns, name) {
+  try {
+    const [jsonRes, yamlRes] = await Promise.all([
+      fetch(`/api/application/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
+      fetch(`/api/application/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
+    ]);
+    if (!jsonRes.ok) throw new Error(`HTTP ${jsonRes.status}`);
+    const app = await jsonRes.json();
+    const yamlText = await yamlRes.text();
+    renderViewAppModal(app, yamlText);
+    document.getElementById('view-app-modal').style.display = 'flex';
+  } catch (e) {
+    toast('Failed to load: ' + e.message, 'error');
+  }
+}
+
+function renderViewAppModal(app, yamlText) {
+  const md = app.metadata || {};
+  const st = app.status || {};
+  const sp = app.spec || {};
+  const cn = md.creationTimestamp || '';
+
+  document.getElementById('va-name').textContent = md.name || '—';
+  document.getElementById('va-namespace').textContent = md.namespace || '—';
+  document.getElementById('va-created').textContent = cn ? `${formatTime(cn)} (${formatAge(cn)})` : '—';
+  document.getElementById('va-uid').textContent = md.uid || '—';
+
+  const labels = md.labels || {};
+  document.getElementById('va-labels').textContent = Object.keys(labels).length
+    ? Object.entries(labels).map(([k,v]) => `${k}=${v}`).join(', ')
+    : '—';
+
+  document.getElementById('va-protection').innerHTML = stateBadge(st.protectionState);
+  document.getElementById('va-health').textContent = st.protectionHealthState || '—';
+  document.getElementById('va-resources').textContent = st.resourceCount != null ? st.resourceCount : '—';
+  document.getElementById('va-storage').textContent = st.storageCapacityBytes != null ? formatBytes(st.storageCapacityBytes) : '—';
+  document.getElementById('va-storage-used').textContent = st.storageUsedCapacityBytes != null ? formatBytes(st.storageUsedCapacityBytes) : '—';
+  document.getElementById('va-details').textContent = (st.protectionStateDetails || []).join(', ') || '—';
+
+  const incl = (sp.includedNamespaces || []).map(x => x.namespace || JSON.stringify(x)).join(', ');
+  document.getElementById('va-included').textContent = incl || '—';
+
+  const rf = sp.resourceFilter;
+  document.getElementById('va-resource-filter').textContent = rf
+    ? JSON.stringify(rf)
+    : '— (no filter)';
+
+  // Conditions table
+  const conds = st.conditions || [];
+  document.getElementById('va-conditions-body').innerHTML = conds.length === 0
+    ? '<tr><td colspan="4" class="empty">No conditions</td></tr>'
+    : conds.map(c => `
+        <tr>
+          <td>${escapeHtml(c.type || '—')}</td>
+          <td>${escapeHtml(c.status || '—')}</td>
+          <td>${escapeHtml(c.reason || '—')}</td>
+          <td>${escapeHtml(c.message || '—')}</td>
+        </tr>
+      `).join('');
+
+  // Raw YAML — from backend (PyYAML, valid + oc apply-able)
+  document.getElementById('va-yaml').textContent = yamlText;
+}
+
+function hideViewAppModal() {
+  document.getElementById('view-app-modal').style.display = 'none';
+}
+
+async function copyAppYAML() {
+  const text = document.getElementById('va-yaml').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied to clipboard', 'success');
+  } catch (e) {
+    // Fallback: select textarea
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('Copied (fallback)', 'success'); }
+    catch (_) { toast('Copy failed', 'error'); }
+    document.body.removeChild(ta);
+  }
+}
+
+function formatTime(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toISOString().replace('T', ' ').slice(0, 19);
+  } catch (_) { return ts; }
+}
+
+function formatAge(ts) {
+  try {
+    const d = new Date(ts);
+    const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec/60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec/3600) + 'h ago';
+    return Math.floor(sec/86400) + 'd ago';
+  } catch (_) { return ''; }
+}
+
+function formatBytes(b) {
+  if (b == null) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  let s = Number(b);
+  for (const x of u) { if (s < 1024) return s.toFixed(1)+' '+x; s /= 1024; }
+  return s.toFixed(1)+' PB';
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+document.getElementById('filter-ns').addEventListener('change', render);
+document.getElementById('filter-q').addEventListener('input', render);
+loadNamespaces();
+loadApps();
+</script>
+{% endblock %}

@@ -1,0 +1,16 @@
+apiVersion: protect.trident.netapp.io/v1
+kind: BackupRestore
+metadata:
+  name: restore-protect-1
+  namespace: trident-protect-1-restore
+spec:
+  appArchivePath: nginx-protect-app_167dc599-f320-4c79-92d2-076c8e0fba30/backups/hourly-dd824-20260722100000_f392f0eb-3686-4fba-8aa2-d3e5f6464505
+  appVaultRef: ontap-s3-appvault
+  backupName: hourly-dd824-20260722100000
+  destinationApplicationName: nginx-protect-app-restored
+  namespaceMapping:
+    - source: trident-protect-1
+      destination: trident-protect-1-restore
+  storageClassMapping:
+    - source: a400-nfs
+      destination: a400-nfs-v2

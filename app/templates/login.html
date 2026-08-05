@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in | Trident Protect</title>
+  <link rel="stylesheet" href="/static/css/netapp.css">
+  <style>
+    html, body { background: #0b0b0b; color: #fff; }
+    .login-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: linear-gradient(135deg, #000 0%, #1a1a1a 100%);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 380px;
+      background: #fff;
+      color: var(--color-text);
+      border-radius: 10px;
+      padding: 32px 28px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    }
+    .login-card .brand {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .login-card .brand small {
+      display: block;
+      font-size: 12px;
+      font-weight: 400;
+      color: #666;
+      margin-top: 2px;
+    }
+    .login-card h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 18px 0 16px;
+    }
+    .login-card label {
+      display: block;
+      font-size: 13px;
+      color: #333;
+      margin-bottom: 12px;
+    }
+    .login-card label span {
+      display: block;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+    .login-card input {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 14px;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--color-text);
+      font-family: inherit;
+    }
+    .login-card input:focus {
+      outline: none;
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 2px rgba(0,0,0,0.06);
+    }
+    .login-card .btn {
+      width: 100%;
+      padding: 11px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: 1px solid var(--color-primary);
+      background: var(--color-primary);
+      color: var(--color-on-primary);
+      cursor: pointer;
+      margin-top: 4px;
+    }
+    .login-card .btn:hover { opacity: 0.9; }
+    .login-card .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .login-error {
+      background: #fff0f0;
+      color: var(--color-error);
+      border: 1px solid var(--color-error);
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      margin-bottom: 14px;
+      display: none;
+    }
+    .login-error.visible { display: block; }
+    .login-hint {
+      margin-top: 18px;
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+      line-height: 1.5;
+    }
+    .login-hint code {
+      background: #f3f3f3;
+      color: #333;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .login-footer {
+      margin-top: 22px;
+      padding-top: 16px;
+      border-top: 1px solid #eee;
+      font-size: 11px;
+      color: #999;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="brand">Trident Protect<small>Dashboard · v2.0.0 unified</small></div>
+      <h1>Sign in to continue</h1>
+      <div id="login-error" class="login-error"></div>
+      <form id="login-form" autocomplete="off">
+        <label>
+          <span>Username</span>
+          <input id="login-username" name="username" autocomplete="username" required autofocus>
+        </label>
+        <label>
+          <span>Password</span>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit" class="btn" id="login-submit">Sign in</button>
+      </form>
+      <div class="login-hint">
+        <b>Local users</b> sign in with a bare username (e.g. <code>nick</code>).<br>
+        <b>Domain users (LDAP)</b> sign in as <code>DOMAIN\user</code> or
+        <code>user@domain</code> (e.g. <code>ntapth\nick</code> or
+        <code>nick@ntapth.com</code>) when enabled in <em>Settings → Credentials</em>.
+      </div>
+      <div class="login-footer">
+        Powered by NetApp · Professional Service Asean Team · &amp; Nick R.
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      const form = document.getElementById('login-form');
+      const errBox = document.getElementById('login-error');
+      const submit = document.getElementById('login-submit');
+      function showError(msg) {
+        errBox.textContent = msg;
+        errBox.classList.add('visible');
+      }
+      function clearError() { errBox.classList.remove('visible'); errBox.textContent = ''; }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        clearError();
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        if (!username || !password) {
+          showError('Username and password are required');
+          return;
+        }
+        submit.disabled = true;
+        submit.textContent = 'Signing in...';
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username, password}),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            window.location.href = '/';
+            return;
+          }
+          showError(data.message || ('Sign in failed (HTTP ' + res.status + ')'));
+        } catch (err) {
+          showError('Network error: ' + err.message);
+        } finally {
+          submit.disabled = false;
+          submit.textContent = 'Sign in';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,649 @@
+{% extends "base.html" %}
+{% block title %}Schedules{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="between">
+    <div>
+      <h1>Schedules</h1>
+      <div class="subtitle">Recurring backup/snapshot schedules</div>
+    </div>
+    {% if tp_user and tp_user.role == 'admin' %}
+    <button class="btn small" onclick="showAddScheduleModal()">+ Add Schedule</button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="filters">
+    <label><span>Namespace</span>
+      <select id="filter-ns">
+        <option value="">All namespaces</option>
+      </select>
+    </label>
+    <label><span>Search</span><input id="filter-q" placeholder="name…" /></label>
+    <button class="btn small" onclick="render()">Apply</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Namespace</th>
+          <th>Name</th>
+          <th>Application</th>
+          <th>Granularity</th>
+          <th>Enabled</th>
+          <th>Last Run</th>
+          <th>Last Backup</th>
+          <th>Last Snapshot</th>
+          <th>Age</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="schedules-tbody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add Schedule Modal (Form + YAML) -->
+<div id="add-schedule-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideAddScheduleModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:750px;max-height:90vh;overflow-y:auto;">
+    <h3>Add Schedule</h3>
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:12px">
+      <button class="form-tab active" id="add-schedule-tab-form" onclick="switchScheduleTab('form')">Form</button>
+      <button class="form-tab" id="add-schedule-tab-yaml" onclick="switchScheduleTab('yaml')">YAML</button>
+    </div>
+
+    <!-- FORM TAB -->
+    <div id="add-schedule-form-tab">
+      <div class="form-row">
+        <label><span>Name</span><input id="add-schedule-name" placeholder="my-schedule" /></label>
+      </div>
+      <div class="form-row">
+        <label><span>Namespace</span><select id="add-schedule-ns" onchange="loadScheduleApps()"></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>Application</span><select id="add-schedule-app"></select></label>
+      </div>
+      <div class="form-row">
+        <label><span>AppVault</span><select id="add-schedule-vault"></select></label>
+      </div>
+      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <label><span>Granularity</span>
+          <select id="add-schedule-gran" onchange="updateScheduleFields()">
+            <option value="Hourly">Hourly</option>
+            <option value="Daily">Daily</option>
+            <option value="Weekly">Weekly</option>
+            <option value="Monthly">Monthly</option>
+          </select>
+        </label>
+        <label><span>Minute</span>
+          <select id="add-schedule-minute"></select>
+        </label>
+        <label><span>Hour</span>
+          <select id="add-schedule-hour" onchange="updateScheduleFields()"></select>
+        </label>
+      </div>
+      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div id="schedule-dow-field" style="display:none">
+          <label><span>Day of Week</span>
+            <select id="add-schedule-dow">
+              <option value="0">Sunday (0)</option>
+              <option value="1">Monday (1)</option>
+              <option value="2">Tuesday (2)</option>
+              <option value="3">Wednesday (3)</option>
+              <option value="4">Thursday (4)</option>
+              <option value="5">Friday (5)</option>
+            </select>
+          </label>
+        </div>
+        <div id="schedule-dom-field" style="display:none">
+          <label><span>Day of Month</span>
+            <select id="add-schedule-dom"></select>
+          </label>
+        </div>
+      </div>
+      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <label><span>Backup Retention</span><input id="add-schedule-bret" type="number" min="0" value="24" /></label>
+        <label><span>Snapshot Retention</span><input id="add-schedule-sret" type="number" min="0" value="24" /></label>
+      </div>
+      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <label><span>Backup Reclaim Policy</span>
+          <select id="add-schedule-brpolicy">
+            <option value="Retain" selected>Retain</option>
+            <option value="Delete">Delete</option>
+          </select>
+        </label>
+        <label><span>Snapshot Reclaim Policy</span>
+          <select id="add-schedule-srpolicy">
+            <option value="Delete" selected>Delete</option>
+            <option value="Retain">Retain</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><input type="checkbox" id="add-schedule-immediate" checked /> <span>Run Immediately <span class="text-muted">(run first occurrence on creation)</span></span></label>
+      </div>
+    </div>
+
+    <!-- YAML TAB -->
+    <div id="add-schedule-yaml-tab" style="display:none">
+      <p class="text-muted">Edit the Schedule YAML manifest. Will be applied to the active cluster context.</p>
+      <textarea id="schedule-yaml" rows="18" style="font-family:var(--font-mono);font-size:13px;width:100%;"></textarea>
+    </div>
+
+    <div id="add-schedule-msg" class="text-muted mt-1" style="min-height:18px;"></div>
+    <div class="modal-footer">
+      <button class="btn secondary" onclick="hideAddScheduleModal()">Cancel</button>
+      <button class="btn secondary" onclick="validateScheduleYAML()">Validate</button>
+      <button class="btn" onclick="applyScheduleYAML()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- View Schedule Modal -->
+<div id="view-schedule-modal" style="display:none;" class="modal-backdrop" onclick="if(event.target===this) hideViewScheduleModal()">
+  <div class="modal" style="max-width:800px;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
+    <div class="between">
+      <h3>Schedule: <span id="vs-name">—</span></h3>
+      <button class="btn secondary small" onclick="hideViewScheduleModal()">Close</button>
+    </div>
+
+    <h4 style="margin-top:16px;">Metadata</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Namespace</b></td><td id="vs-namespace">—</td></tr>
+        <tr><td><b>Created</b></td><td id="vs-created">—</td></tr>
+        <tr><td><b>Labels</b></td><td id="vs-labels">—</td></tr>
+        <tr><td><b>UID</b></td><td id="vs-uid">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Spec</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Application</b></td><td id="vs-appref">—</td></tr>
+        <tr><td><b>Enabled</b></td><td id="vs-enabled">—</td></tr>
+        <tr><td><b>Granularity</b></td><td id="vs-granularity">—</td></tr>
+        <tr><td><b>Backup Retention</b></td><td id="vs-backup-retention">—</td></tr>
+        <tr><td><b>Snapshot Retention</b></td><td id="vs-snapshot-retention">—</td></tr>
+        <tr><td><b>Backup Policy</b></td><td id="vs-backup-policy">—</td></tr>
+        <tr><td><b>Snapshot Policy</b></td><td id="vs-snapshot-policy">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Status</h4>
+    <table>
+      <tbody>
+        <tr><td><b>Last Schedule Time</b></td><td id="vs-last-schedule-time">—</td></tr>
+        <tr><td><b>Last Backup</b></td><td id="vs-last-backup">—</td></tr>
+        <tr><td><b>Last Snapshot</b></td><td id="vs-last-snapshot">—</td></tr>
+      </tbody>
+    </table>
+
+    <h4 style="margin-top:16px;">Conditions</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="vs-conditions-body">
+          <tr><td colspan="4" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+      Raw YAML
+      <button class="btn secondary small" onclick="copyScheduleYAML()">Copy</button>
+    </h4>
+    <pre id="vs-yaml" style="background:var(--color-surface);padding:12px;max-height:300px;overflow:auto;font-family:var(--font-mono);font-size:12px;border:1px solid var(--color-border);"></pre>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let schedules = [];
+async function loadNamespaces() {
+  try {
+    const res = await tpFetch('/api/namespaces');
+    const data = await res.json();
+    const items = (data.items || []).sort((a, b) => a.name.localeCompare(b.name));
+    const select = document.getElementById('filter-ns');
+    for (const ns of items) {
+      const opt = document.createElement('option');
+      opt.value = ns.name;
+      opt.textContent = ns.name;
+      select.appendChild(opt);
+    }
+  } catch (e) {
+    console.error('Failed to load namespaces:', e);
+  }
+}
+
+async function loadSchedules() {
+  try {
+    const res = await tpFetch('/api/schedules');
+    const data = await res.json();
+    schedules = data.items || [];
+    render();
+  } catch (e) {
+    schedules = [];
+    render();
+  }
+}
+function render() {
+  const nsF = document.getElementById('filter-ns').value;
+  const q = document.getElementById('filter-q').value.toLowerCase();
+  const rows = schedules.filter(s =>
+    (!nsF || s.namespace === nsF) &&
+    (!q || s.name.toLowerCase().includes(q) || s.namespace.toLowerCase().includes(q))
+  );
+  document.getElementById('schedules-tbody').innerHTML = rows.map(s => {
+    const ns = escapeHtml(s.namespace);
+    const name = escapeHtml(s.name);
+    const toggleBtn = s.enabled
+      ? `<button class="btn small danger" onclick="toggleSchedule('${ns}','${name}', false)" title="Disable this schedule (it will stop taking snapshots)">Disable</button>`
+      : `<button class="btn small success" onclick="toggleSchedule('${ns}','${name}', true)" title="Enable this schedule (it will start taking snapshots)">Enable</button>`;
+    return `
+    <tr>
+      <td>${ns}</td>
+      <td><b>${name}</b></td>
+      <td>${escapeHtml(s.applicationRef || '—')}</td>
+      <td>${escapeHtml(s.granularity)}</td>
+      <td>${s.enabled ? '<span style="color:var(--color-success)">✓</span>' : '<span style="color:var(--color-error)">✗</span>'}</td>
+      <td>${escapeHtml(s.lastScheduleTime)} <span class="text-muted">(${escapeHtml(s.lastScheduleTimeAgo)})</span></td>
+      <td>${escapeHtml(s.lastBackup || '—')}</td>
+      <td>${escapeHtml(s.lastSnapshot || '—')}</td>
+      <td>${escapeHtml(s.age)}</td>
+      <td>
+        ${isAdmin() ? toggleBtn : ''}
+        <button class="btn small secondary" onclick="viewSchedule('${ns}','${name}')">View</button>
+        ${isAdmin() ? `<button class="btn small danger" onclick="deleteSchedule('${ns}','${name}')">Delete</button>` : ''}
+      </td>
+    </tr>
+  `;}).join('') || `<tr><td colspan="10" class="empty">No schedules</td></tr>`;
+}
+
+async function toggleSchedule(namespace, name, enable) {
+  if (!tpRequireAdmin()) return;
+  const action = enable ? 'enable' : 'disable';
+  const verb = enable ? 'Enable' : 'Disable';
+  if (!confirm(`${verb} schedule "${name}" in namespace "${namespace}"?`)) return;
+  // Backend discovers the cluster that owns the Schedule CR (no client-side
+  // cluster-profile assumption). Operator may pin a specific cluster by
+  // appending ?context=<kubecontext> via the API directly if needed.
+  try {
+    const res = await tpFetch(
+      `/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${action}`,
+      { method: 'POST' }
+    );
+    const r = await res.json();
+    toast(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) loadSchedules();
+  } catch (e) {
+    toast(`Failed to ${action} schedule: ${e.message}`, 'error');
+  }
+}
+
+// ---- Add Schedule modal ----
+const DEFAULT_SCHEDULE_YAML = `apiVersion: protect.trident.netapp.io/v1
+kind: Schedule
+metadata:
+  name: my-schedule
+  namespace: trident-protect-1
+spec:
+  applicationRef: my-app
+  appVaultRef: ontap-s3-appvault
+  enabled: true
+  granularity: Hourly
+  backupRetention: "24"
+  snapshotRetention: "24"
+  backupReclaimPolicy: Retain # or Delete
+  snapshotReclaimPolicy: Delete # or Retain
+  dataMover: Kopia`;
+
+function switchScheduleTab(tab) {
+  const isForm = tab === 'form';
+  document.getElementById('add-schedule-form-tab').style.display = isForm ? '' : 'none';
+  document.getElementById('add-schedule-yaml-tab').style.display = isForm ? 'none' : '';
+  document.getElementById('add-schedule-tab-form').classList.toggle('active', isForm);
+  document.getElementById('add-schedule-tab-yaml').classList.toggle('active', !isForm);
+  if (!isForm) {
+    document.getElementById('schedule-yaml').value = buildScheduleYamlFromForm();
+  }
+}
+
+function fillNumberOptions(id, min, max) {
+  const sel = document.getElementById(id);
+  sel.innerHTML = '';
+  for (let i = min; i <= max; i++) {
+    sel.innerHTML += `<option value="${i}">${i.toString().padStart(2,'0')}</option>`;
+  }
+}
+
+function updateScheduleFields() {
+  const gran = document.getElementById('add-schedule-gran').value;
+  const dowField = document.getElementById('schedule-dow-field');
+  const domField = document.getElementById('schedule-dom-field');
+  const hourSel = document.getElementById('add-schedule-hour');
+  // Hour only for Daily/Weekly/Monthly
+  hourSel.disabled = (gran === 'Hourly');
+  if (gran === 'Hourly') {
+    dowField.style.display = 'none';
+    domField.style.display = 'none';
+  } else if (gran === 'Weekly') {
+    dowField.style.display = '';
+    domField.style.display = 'none';
+  } else if (gran === 'Monthly') {
+    dowField.style.display = 'none';
+    domField.style.display = '';
+  } else {
+    dowField.style.display = 'none';
+    domField.style.display = 'none';
+  }
+}
+
+function buildScheduleYamlFromForm() {
+  const name = document.getElementById('add-schedule-name').value.trim() || 'my-schedule';
+  const ns = document.getElementById('add-schedule-ns').value || 'trident-protect';
+  const app = document.getElementById('add-schedule-app').value || 'my-app';
+  const vault = document.getElementById('add-schedule-vault').value || 'ontap-s3-appvault';
+  const gran = document.getElementById('add-schedule-gran').value;
+  const minute = document.getElementById('add-schedule-minute').value;
+  const hour = document.getElementById('add-schedule-hour').value;
+  const bret = document.getElementById('add-schedule-bret').value || '0';
+  const sret = document.getElementById('add-schedule-sret').value || '0';
+  const immediate = document.getElementById('add-schedule-immediate').checked;
+  let lines = [];
+  lines.push(`apiVersion: protect.trident.netapp.io/v1`);
+  lines.push(`kind: Schedule`);
+  lines.push(`metadata:`);
+  lines.push(`  name: ${name}`);
+  lines.push(`  namespace: ${ns}`);
+  lines.push(`spec:`);
+  lines.push(`  applicationRef: ${app}`);
+  lines.push(`  appVaultRef: ${vault}`);
+  lines.push(`  enabled: true`);
+  lines.push(`  granularity: ${gran}`);
+  if (gran === 'Hourly') {
+    lines.push(`  minute: "${minute}"`);
+  } else if (gran === 'Daily') {
+    lines.push(`  minute: "${minute}"`);
+    lines.push(`  hour: "${hour}"`);
+  } else if (gran === 'Weekly') {
+    lines.push(`  minute: "${minute}"`);
+    lines.push(`  hour: "${hour}"`);
+    const dow = document.getElementById('add-schedule-dow').value;
+    lines.push(`  dayOfWeek: "${dow}"`);
+  } else if (gran === 'Monthly') {
+    lines.push(`  minute: "${minute}"`);
+    lines.push(`  hour: "${hour}"`);
+    const dom = document.getElementById('add-schedule-dom').value;
+    lines.push(`  dayOfMonth: "${dom}"`);
+  }
+  lines.push(`  backupRetention: "${bret}"`);
+  lines.push(`  snapshotRetention: "${sret}"`);
+  lines.push(`  backupReclaimPolicy: ${document.getElementById('add-schedule-brpolicy').value}`);
+  lines.push(`  snapshotReclaimPolicy: ${document.getElementById('add-schedule-srpolicy').value}`);
+  lines.push(`  dataMover: Kopia`);
+  if (immediate) lines.push(`  runImmediately: true`);
+  return lines.join('\n');
+}
+
+async function loadScheduleApps() {
+  const ns = document.getElementById('add-schedule-ns').value;
+  const sel = document.getElementById('add-schedule-app');
+  if (!ns) { sel.innerHTML = '<option value="">—</option>'; return; }
+  try {
+    const res = await tpFetch(`/api/applications?namespace=${encodeURIComponent(ns)}`);
+    const data = await res.json();
+    const apps = data.items || [];
+    sel.innerHTML = apps.length
+      ? apps.map(a => `<option value="${a.name}">${a.name}</option>`).join('')
+      : '<option value="">No apps in this ns</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function loadScheduleAppVaults() {
+  const sel = document.getElementById('add-schedule-vault');
+  try {
+    const res = await tpFetch('/api/appvaults');
+    const data = await res.json();
+    const vaults = data.items || [];
+    sel.innerHTML = vaults.length
+      ? vaults.map(v => `<option value="${v.name}">${v.name} (${v.namespace})</option>`).join('')
+      : '<option value="">No appvaults found</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+
+async function showAddScheduleModal() {
+  document.getElementById('add-schedule-msg').textContent = '';
+  document.getElementById('add-schedule-msg').style.color = '';
+  document.getElementById('add-schedule-name').value = '';
+  document.getElementById('add-schedule-bret').value = '24';
+  document.getElementById('add-schedule-sret').value = '24';
+  document.getElementById('add-schedule-immediate').checked = true;
+  fillNumberOptions('add-schedule-minute', 0, 59);
+  fillNumberOptions('add-schedule-hour', 0, 23);
+  fillNumberOptions('add-schedule-dom', 1, 31);
+  document.getElementById('add-schedule-minute').value = '0';
+  document.getElementById('add-schedule-hour').value = '2';
+  await populateNsDropdown('add-schedule-ns');
+  await loadScheduleApps();
+  await loadScheduleAppVaults();
+  updateScheduleFields();
+  document.getElementById('schedule-yaml').value = DEFAULT_SCHEDULE_YAML;
+  switchScheduleTab('form');
+  document.getElementById('add-schedule-modal').style.display = 'flex';
+}
+function hideAddScheduleModal() {
+  document.getElementById('add-schedule-modal').style.display = 'none';
+}
+function getScheduleYaml() {
+  const formTab = document.getElementById('add-schedule-form-tab');
+  if (formTab.style.display !== 'none') {
+    return buildScheduleYamlFromForm();
+  }
+  return document.getElementById('schedule-yaml').value.trim();
+}
+async function validateScheduleYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getScheduleYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  try {
+    const res = await tpFetch('/api/schedule/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); }
+}
+async function applyScheduleYAML() {
+  if (!tpRequireAdmin()) return;
+  const yaml = getScheduleYaml();
+  if (!yaml) { showAddMsg('YAML required', 'error'); return; }
+  let v;
+  try {
+    const vRes = await tpFetch('/api/schedule/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    v = await vRes.json();
+  } catch (e) { showAddMsg('Validate failed: ' + e.message, 'error'); return; }
+  if (!v.ok) { showAddMsg('Invalid: ' + v.message, 'error'); return; }
+  if (!confirm(v.message + '\n\nApply now?')) return;
+  try {
+    const res = await tpFetch('/api/schedule/apply', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({yaml}),
+    });
+    const r = await res.json();
+    showAddMsg(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) {
+      setTimeout(() => { hideAddScheduleModal(); loadSchedules(); }, 1000);
+    }
+  } catch (e) { showAddMsg('Apply failed: ' + e.message, 'error'); }
+}
+function showAddMsg(text, kind) {
+  const el = document.getElementById('add-schedule-msg');
+  el.textContent = text;
+  el.style.color = kind === 'error' ? 'var(--color-error)' : kind === 'success' ? 'var(--color-success)' : 'var(--color-text-muted, #666)';
+  el.style.fontSize = '13px';
+}
+
+// ---- View Schedule modal ----
+async function viewSchedule(ns, name) {
+  try {
+    const [jsonRes, yamlRes] = await Promise.all([
+      tpFetch(`/api/schedule/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
+      tpFetch(`/api/schedule/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
+    ]);
+    if (!jsonRes.ok) throw new Error(`HTTP ${jsonRes.status}`);
+    const sch = await jsonRes.json();
+    const yamlText = await yamlRes.text();
+    renderViewScheduleModal(sch, yamlText);
+    document.getElementById('view-schedule-modal').style.display = 'flex';
+  } catch (e) {
+    toast('Failed to load: ' + e.message, 'error');
+  }
+}
+
+function renderViewScheduleModal(sch, yamlText) {
+  const md = sch.metadata || {};
+  const sp = sch.spec || {};
+  const st = sch.status || {};
+  const cn = md.creationTimestamp || '';
+
+  document.getElementById('vs-name').textContent = md.name || '—';
+  document.getElementById('vs-namespace').textContent = md.namespace || '—';
+  document.getElementById('vs-created').textContent = cn ? `${formatTime(cn)} (${formatAge(cn)})` : '—';
+  document.getElementById('vs-uid').textContent = md.uid || '—';
+
+  const labels = md.labels || {};
+  document.getElementById('vs-labels').textContent = Object.keys(labels).length
+    ? Object.entries(labels).map(([k,v]) => `${k}=${v}`).join(', ')
+    : '—';
+
+  document.getElementById('vs-appref').textContent = sp.applicationRef || '—';
+  document.getElementById('vs-enabled').innerHTML = sp.enabled
+    ? '<span style="color:var(--color-success)">✓ Enabled</span>'
+    : '<span style="color:var(--color-error)">✗ Disabled</span>';
+  document.getElementById('vs-granularity').textContent = sp.granularity || '—';
+
+  // backupRetention / snapshotRetention can be string ("24") or object ({count: 24})
+  const br = sp.backupRetention;
+  document.getElementById('vs-backup-retention').textContent = br != null
+    ? (typeof br === 'object' ? `Count: ${br.count || '—'}` : br) : '—';
+  const sr = sp.snapshotRetention;
+  document.getElementById('vs-snapshot-retention').textContent = sr != null
+    ? (typeof sr === 'object' ? `Count: ${sr.count || '—'}` : sr) : '—';
+
+  document.getElementById('vs-backup-policy').textContent = sp.backupReclaimPolicy
+    ? `${sp.backupReclaimPolicy}${sp.dataMover ? ' · dataMover: ' + sp.dataMover : ''}`
+    : '—';
+  document.getElementById('vs-snapshot-policy').textContent = sp.snapshotReclaimPolicy || '—';
+
+  document.getElementById('vs-last-schedule-time').textContent = st.lastScheduleTime
+    ? `${formatTime(st.lastScheduleTime)} (${formatAge(st.lastScheduleTime)})`
+    : '—';
+
+  const lrp = st.lastRecoveryPoints || {};
+  document.getElementById('vs-last-backup').textContent = (lrp.backup || {}).name || '—';
+  document.getElementById('vs-last-snapshot').textContent = (lrp.snapshot || {}).name || '—';
+
+  const conds = st.conditions || [];
+  document.getElementById('vs-conditions-body').innerHTML = conds.length === 0
+    ? '<tr><td colspan="4" class="empty">No conditions</td></tr>'
+    : conds.map(c => `
+        <tr>
+          <td>${escapeHtml(c.type || '—')}</td>
+          <td>${escapeHtml(c.status || '—')}</td>
+          <td>${escapeHtml(c.reason || '—')}</td>
+          <td>${escapeHtml(c.message || '—')}</td>
+        </tr>
+      `).join('');
+
+  document.getElementById('vs-yaml').textContent = yamlText;
+}
+
+function hideViewScheduleModal() {
+  document.getElementById('view-schedule-modal').style.display = 'none';
+}
+
+async function copyScheduleYAML() {
+  const text = document.getElementById('vs-yaml').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied to clipboard', 'success');
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('Copied (fallback)', 'success'); }
+    catch (_) { toast('Copy failed', 'error'); }
+    document.body.removeChild(ta);
+  }
+}
+
+// ---- Delete Schedule ----
+async function deleteSchedule(ns, name) {
+  if (!tpRequireAdmin()) return;
+  if (!confirm(`Delete schedule '${ns}/${name}'?`)) return;
+  try {
+    const res = await tpFetch(`/api/schedule/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    const r = await res.json();
+    toast(r.message, r.ok ? 'success' : 'error');
+    if (r.ok) loadSchedules();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+// ---- Helpers ----
+function formatTime(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toISOString().replace('T', ' ').slice(0, 19);
+  } catch (_) { return ts; }
+}
+
+function formatAge(ts) {
+  try {
+    const d = new Date(ts);
+    const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec/60) + 'm ago';
+    if (sec < 86400) return Math.floor(sec/3600) + 'h ago';
+    return Math.floor(sec/86400) + 'd ago';
+  } catch (_) { return ''; }
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+document.getElementById('filter-ns').addEventListener('change', render);
+document.getElementById('filter-q').addEventListener('input', render);
+loadNamespaces();
+loadSchedules();
+</script>
+{% endblock %}
