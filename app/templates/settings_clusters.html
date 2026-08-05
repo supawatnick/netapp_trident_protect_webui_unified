@@ -26,38 +26,6 @@
 </div>
 
 <div class="card">
-  <h2 style="cursor:pointer" onclick="toggleHelp()">
-    How to register a new Kubernetes cluster?
-    <span id="help-toggle" style="float:right;font-size:14px;">▼</span>
-  </h2>
-  <div id="help-content" style="display:none;margin-top:16px;">
-
-    <h3>Method A — Bearer token (api_url + token)</h3>
-    <p class="text-muted">Create a service account token on the target cluster:</p>
-    <pre><code>kubectl -n kube-system create serviceaccount k8s-ui-sa
-kubectl create clusterrolebinding k8s-ui-binding \
-  --clusterrole=cluster-admin --serviceaccount=kube-system:k8s-ui-sa
-kubectl -n kube-system create token k8s-ui-sa --duration=87600h</code></pre>
-    <p class="text-muted">Then in this UI:</p>
-    <ol>
-      <li>Click <b>"+ Add Profile"</b> below</li>
-      <li>Fill in Profile Name + API URL, then click <b>Save Profile</b></li>
-      <li>Click <b>"Login &amp; Switch"</b> on the new profile row</li>
-      <li>Paste the bearer token, then click <b>"Login &amp; Switch"</b> again</li>
-    </ol>
-
-    <h3>Method B — Import kubeconfig file</h3>
-    <ol>
-      <li>Click <b>"Import Kubeconfig"</b> at the bottom of this page</li>
-      <li>Paste a kubeconfig YAML (or upload a file)</li>
-      <li>A profile is auto-created from the kubeconfig's <code>current-context</code></li>
-    </ol>
-    <p class="text-muted">After import, click <b>"Login &amp; Switch"</b> on the new row to activate it.</p>
-
-  </div>
-</div>
-
-<div class="card">
   <h2 style="cursor:pointer" onclick="toggleKubeconfig()">
     Import Kubeconfig
     <span id="kubeconfig-toggle" style="float:right;font-size:14px;">▼</span>
