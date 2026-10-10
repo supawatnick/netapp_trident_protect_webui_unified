@@ -87,3 +87,11 @@ Known next review items:
 ## Additional continuity
 
 An orchestration-side reference file was created at `/root/src/docs/TRIDENTDEV-SSH-RUNBOOK.md`, but **this repository copy is the canonical handoff** for future chats.
+
+## Phase 3 continuation update — 2026-10-10
+
+Draft implementation review: https://github.com/supawatnick/netapp_trident_protect_webui_unified/pull/1
+
+Development branch: `feature/phase3-application-management` (not merged or deployed as of this update). The branch includes the application form for metadata labels, per-namespace label selectors, cluster-scoped selectors, PVC-only filter, VM freeze override, safe declarative edit, overview and regression/CI checks. NetApp reference: https://docs.netapp.com/us-en/trident/trident-protect/trident-protect-manage-applications.html.
+
+**Read the PR and CI results before resuming.** SSH to the development host with the verified explicit key; reconcile against the local checkout (not yet verified) before deploying. End-to-end tests with Kubernetes, AppVault, S3, Backup, Snapshot, and Restore are still pending. Do not state that Phase 3 is production validated until these pass.
