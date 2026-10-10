@@ -26,6 +26,12 @@ hardened to **bearer-token-only** (no username/password).
 
 ---
 
+## Developer handoff / remote access
+
+For the verified SSH connection to `tridentdev` (`10.10.110.75`), the correct identity file, safety notes and Phase 3 continuation steps, **read [TRIDENTDEV SSH and Phase 3 Handoff Runbook](docs/TRIDENTDEV-SSH-RUNBOOK.md) before starting a new development session**.
+
+---
+
 ## Architecture
 
 ```
