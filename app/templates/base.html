@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Trident Protect{% endblock %} | Trident Protect</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Mono:wght@400;700&family=Work+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/netapp.css">
   <script>
     {% if tp_user %}
@@ -43,19 +46,19 @@
         <li><a href="/logs" class="{% if request.path.startswith('/logs') %}active{% endif %}">Logs</a></li>
         {% endif %}
       </ul>
-      <div style="margin-top: auto; font-size: 11px; opacity: 0.6; line-height:1.6; padding-top: 32px;">
+      <div class="rawblock-footer">
         Powered by NetApp<br>Professional Service Asean Team<br>&amp; Nick R.
       </div>
       {% if tp_user %}
-      <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.2); font-size: 12px;">
-        <div style="opacity:0.85;">
+      <div class="rawblock-account">
+        <div>
           <b id="tp-current-user">{{ tp_user.user }}</b>
-          <span class="badge" style="margin-left:6px;background:{% if tp_user.role == 'admin' %}#008000{% else %}#666{% endif %};color:#fff;border:none;">
+          <span class="badge">
             {{ tp_user.role }}
           </span>
         </div>
-        <div style="margin-top:6px;opacity:0.7;font-size:11px;">{{ tp_user.source }}</div>
-        <a href="/logout" style="display:inline-block;margin-top:8px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.4);">Logout</a>
+        <div class="rawblock-meta">{{ tp_user.source }}</div>
+        <a href="/logout">Logout</a>
       </div>
       {% endif %}
     </aside>
