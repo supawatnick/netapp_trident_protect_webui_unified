@@ -924,45 +924,24 @@ def get_snapshotrestore(namespace: str, name: str) -> dict | None:
 
 
 def serialize_app_to_yaml(app: dict) -> str:
-    """Convert Application CR dict to valid YAML string.
+    """Emit a declarative Application manifest safe to edit and re-apply.
 
-    Removes noisy metadata (managedFields, annotations) and dumps
-    with PyYAML so the output can be copied directly into `oc apply -f`.
-    Adds apiVersion/kind if missing (CLI output omits them).
+    Preserve metadata labels, user annotations and the Trident Protect spec.
+    Exclude runtime metadata, finalizers and controller-owned status.
     """
-    clean = {**app}
-    # Ensure apiVersion and kind are present (CLI output may omit them)
-    if "apiVersion" not in clean:
-        clean["apiVersion"] = "protect.trident.netapp.io/v1"
-    if "kind" not in clean:
-        clean["kind"] = "Application"
-    # Move apiVersion/kind to top for canonical order
-    ordered = {
-        "apiVersion": clean.pop("apiVersion"),
-        "kind": clean.pop("kind"),
-        "metadata": {},
-        "spec": {},
-        "status": {},
+    md = app.get("metadata") or {}
+    allowed_metadata = {
+        key: md[key] for key in ("name", "namespace", "labels", "annotations")
+        if key in md
     }
-    if isinstance(clean.get("metadata"), dict):
-        ordered["metadata"] = {
-            k: v for k, v in clean["metadata"].items()
-            if k not in ("managedFields", "annotations")
-        }
-        del clean["metadata"]
-    ordered["spec"] = clean.pop("spec", {})
-    ordered["status"] = clean.pop("status", {})
-    # Re-insert any extra top-level keys (shouldn't be any, but be safe)
-    for k, v in clean.items():
-        ordered[k] = v
-    return _yaml.dump(
-        ordered,
-        default_flow_style=False,
-        sort_keys=False,
-        indent=2,
-        allow_unicode=True,
-        width=4096,
-    )
+    output = {
+        "apiVersion": "protect.trident.netapp.io/v1",
+        "kind": "Application",
+        "metadata": allowed_metadata,
+        "spec": app.get("spec") or {},
+    }
+    return _yaml.safe_dump(output, default_flow_style=False, sort_keys=False,
+                           allow_unicode=True, width=4096)
 
 
 # --- Backup management ---
