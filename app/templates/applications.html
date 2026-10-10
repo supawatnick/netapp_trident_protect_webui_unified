@@ -65,6 +65,31 @@
           <textarea id="add-app-labels" rows="2" placeholder="app=myapp&#10;tier=frontend"></textarea>
         </label>
       </div>
+      <div class="form-row">
+        <label><span>Included Namespaces (one per line)</span>
+          <textarea id="add-app-included-ns" rows="3" placeholder="my-app-namespace&#10;another-namespace|app=example-app"></textarea>
+          <small class="text-muted">Format: namespace or namespace|key=value,key2=value. The Application namespace is always included.</small>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><span>Cluster-scoped resources (optional)</span>
+          <textarea id="add-app-cluster-scoped" rows="2" placeholder="rbac.authorization.k8s.io|v1|ClusterRole|mylabel=test"></textarea>
+          <small class="text-muted">Format: group|version|kind|optional-labels. Leave blank to exclude.</small>
+        </label>
+      </div>
+      <div class="form-row">
+        <label><input id="add-app-pvc-only" type="checkbox" /> PVC-only application</label>
+        <small class="text-muted">Includes PVC, PV and VolumeSnapshotClass resources for compatible data protection.</small>
+      </div>
+      <div class="form-row">
+        <label><span>VM filesystem freeze override</span>
+          <select id="add-app-freeze">
+            <option value="">Use cluster default</option>
+            <option value="false">Freeze VM filesystem</option>
+            <option value="true">Skip VM freeze</option>
+          </select>
+        </label>
+      </div>
     </div>
 
     <!-- YAML TAB -->
@@ -166,10 +191,23 @@ async function loadNamespaces() {
 }
 
 async function loadApps() {
-  const res = await fetch('/api/applications');
-  const data = await res.json();
-  apps = data.items || [];
-  render();
+  const body = document.getElementById('apps-tbody');
+  try {
+    const response = await fetch('/api/applications', {cache: 'no-store'});
+    if (!response.ok) throw new Error('Cluster API returned HTTP ' + response.status);
+    const data = await response.json();
+    if (!Array.isArray(data.items)) throw new Error('Malformed application list');
+    apps = data.items;
+    render();
+  } catch (error) {
+    apps = [];
+    body.replaceChildren();
+    const cell = body.insertRow().insertCell();
+    cell.colSpan = 9;
+    cell.className = 'empty';
+    cell.style.color = 'var(--color-error)';
+    cell.textContent = 'Unable to load applications: ' + error.message;
+  }
 }
 async function deleteApplication(ns, name) {
   if (!tpRequireAdmin()) return;
@@ -195,18 +233,25 @@ function render() {
       <td>${escapeHtml(a.namespace)}</td>
       <td><b>${escapeHtml(a.name)}</b></td>
       <td>${stateBadge(a.protectionState)}</td>
-      <td>${escapeHtml(a.protectionHealthState || '—')}</td>
+      <td>${stateBadge(a.protectionHealthState || '—')}</td>
       <td>${a.resourceCount}</td>
       <td>${escapeHtml(a.storageHuman)}</td>
       <td class="text-muted">${escapeHtml((a.details || []).join(', ') || '—')}</td>
       <td>${escapeHtml(a.age)}</td>
       <td>
-        <button class="btn small secondary" onclick="viewApplication('${escapeHtml(a.namespace)}','${escapeHtml(a.name)}')">View</button>
-        ${isAdmin() ? `<button class="btn small danger" onclick="deleteApplication('${escapeHtml(a.namespace)}','${escapeHtml(a.name)}')">Del</button>` : ''}
+        <button class="btn small secondary" data-app-action="view" data-ns="${escapeHtml(a.namespace)}" data-name="${escapeHtml(a.name)}">View</button>
+        ${isAdmin() ? `<button class="btn small danger" data-app-action="delete" data-ns="${escapeHtml(a.namespace)}" data-name="${escapeHtml(a.name)}">Del</button>` : ''}
       </td>
     </tr>
   `).join('') || `<tr><td colspan="9" class="empty">No matches</td></tr>`;
 }
+
+document.getElementById('apps-tbody').addEventListener('click', event => {
+  const button = event.target.closest('button[data-app-action]');
+  if (!button) return;
+  if (button.dataset.appAction === 'view') viewApplication(button.dataset.ns, button.dataset.name);
+  if (button.dataset.appAction === 'delete') deleteApplication(button.dataset.ns, button.dataset.name);
+});
 
 // ---- Add Application modal ----
 const DEFAULT_APP_YAML = `apiVersion: protect.trident.netapp.io/v1
@@ -225,34 +270,85 @@ function switchAppTab(tab) {
   document.getElementById('add-app-tab-form').classList.toggle('active', isForm);
   document.getElementById('add-app-tab-yaml').classList.toggle('active', !isForm);
   if (!isForm) {
-    document.getElementById('app-yaml').value = buildAppYamlFromForm();
+    try {
+      document.getElementById('app-yaml').value = buildAppYamlFromForm();
+    } catch (error) {
+      showAddMsg(error.message, 'error');
+      return;
+    }
   }
 }
 
-function buildAppYamlFromForm() {
-  const name = document.getElementById('add-app-name').value.trim() || 'my-app';
-  const ns = document.getElementById('add-app-ns').value || 'my-app-ns';
-  const labelsRaw = document.getElementById('add-app-labels').value.trim();
-  let metaLabels = '';
-  if (labelsRaw) {
-    const labels = {};
-    labelsRaw.split('\n').forEach(line => {
-      const [k, v] = line.split('=').map(s => s.trim());
-      if (k && v) labels[k] = v;
-    });
-    if (Object.keys(labels).length) {
-      metaLabels = '\n  labels:\n' + Object.entries(labels)
-        .map(([k, v]) => `    ${k}: "${v}"`).join('\n');
-    }
+function parseLabelPairs(text, label) {
+  const pairs = {};
+  for (const fragment of text.split(/[\n,]/).map(s => s.trim()).filter(Boolean)) {
+    const equals = fragment.indexOf('=');
+    if (equals <= 0) throw new Error(label + ': labels must use key=value');
+    const key = fragment.slice(0, equals).trim();
+    const value = fragment.slice(equals + 1).trim();
+    if (Object.prototype.hasOwnProperty.call(pairs, key)) throw new Error(label + ': duplicate key ' + key);
+    pairs[key] = value;
   }
-  return `apiVersion: protect.trident.netapp.io/v1
-kind: Application
-metadata:
-  name: ${name}
-  namespace: ${ns}${metaLabels}
-spec:
-  includedNamespaces:
-    - namespace: ${ns}`;
+  return pairs;
+}
+function buildAppYamlFromForm() {
+  const name = document.getElementById('add-app-name').value.trim();
+  const ns = document.getElementById('add-app-ns').value.trim();
+  if (!name || !ns) throw new Error('Application name and namespace are required');
+  const quote = value => JSON.stringify(value);
+  const lines = ['apiVersion: protect.trident.netapp.io/v1', 'kind: Application', 'metadata:',
+    '  name: ' + quote(name), '  namespace: ' + quote(ns)];
+  const metaLabels = parseLabelPairs(document.getElementById('add-app-labels').value, 'Application labels');
+  if (Object.keys(metaLabels).length) {
+    lines.push('  labels:');
+    Object.entries(metaLabels).forEach(([k, v]) => lines.push('    ' + quote(k) + ': ' + quote(v)));
+  }
+  const freeze = document.getElementById('add-app-freeze').value;
+  if (freeze) {
+    lines.push('  annotations:', '    "protect.trident.netapp.io/skip-vm-freeze": ' + quote(freeze));
+  }
+  lines.push('spec:', '  includedNamespaces:');
+  const rawNs = document.getElementById('add-app-included-ns').value.split('\n')
+    .map(s => s.trim()).filter(Boolean);
+  const includes = rawNs.length ? rawNs : [ns];
+  const seen = new Set();
+  if (!includes.some(x => x.split('|')[0].trim() === ns)) includes.unshift(ns);
+  includes.forEach(entry => {
+    const segments = entry.split('|');
+    if (segments.length > 2) throw new Error('Namespace selector must use namespace|key=value');
+    const itemNs = segments[0].trim();
+    if (!itemNs || seen.has(itemNs)) throw new Error('Empty or duplicate included namespace: ' + itemNs);
+    seen.add(itemNs);
+    lines.push('    - namespace: ' + quote(itemNs));
+    if (segments.length === 2 && segments[1].trim()) {
+      const labels = parseLabelPairs(segments[1], 'Namespace selector');
+      lines.push('      labelSelector:', '        matchLabels:');
+      Object.entries(labels).forEach(([k, v]) => lines.push('          ' + quote(k) + ': ' + quote(v)));
+    }
+  });
+  const scope = document.getElementById('add-app-cluster-scoped').value.split('\n')
+    .map(s => s.trim()).filter(Boolean);
+  if (scope.length) lines.push('  includedClusterScopedResources:');
+  scope.forEach(entry => {
+    const parts = entry.split('|');
+    if (parts.length < 3 || parts.length > 4 || !parts[1].trim() || !parts[2].trim()) {
+      throw new Error('Cluster resource format: group|version|kind|optional-labels');
+    }
+    lines.push('    - groupVersionKind:', '        group: ' + quote(parts[0].trim()),
+      '        version: ' + quote(parts[1].trim()), '        kind: ' + quote(parts[2].trim()));
+    if (parts[3] && parts[3].trim()) {
+      const labels = parseLabelPairs(parts[3], 'Cluster-scoped resource selector');
+      lines.push('      labelSelector:', '        matchLabels:');
+      Object.entries(labels).forEach(([k, v]) => lines.push('          ' + quote(k) + ': ' + quote(v)));
+    }
+  });
+  if (document.getElementById('add-app-pvc-only').checked) {
+    lines.push('  resourceFilter:', '    resourceSelectionCriteria: Include', '    resourceMatchers:',
+      '      - kind: PersistentVolumeClaim', '        version: v1',
+      '      - kind: PersistentVolume', '        version: v1',
+      '      - kind: VolumeSnapshotClass', '        version: v1');
+  }
+  return lines.join('\n');
 }
 
 function parseAppYamlToForm(yamlStr) {
@@ -279,6 +375,10 @@ async function showAddAppModal() {
   document.getElementById('add-app-msg').style.color = '';
   document.getElementById('add-app-name').value = '';
   document.getElementById('add-app-labels').value = '';
+  document.getElementById('add-app-included-ns').value = '';
+  document.getElementById('add-app-cluster-scoped').value = '';
+  document.getElementById('add-app-pvc-only').checked = false;
+  document.getElementById('add-app-freeze').value = '';
   await populateNsDropdown('add-app-ns');
   document.getElementById('app-yaml').value = DEFAULT_APP_YAML;
   switchAppTab('form');
@@ -289,11 +389,15 @@ function hideAddAppModal() {
   document.getElementById('add-app-modal').style.display = 'none';
 }
 function getAppYaml() {
-  const formTab = document.getElementById('add-app-form-tab');
-  if (formTab.style.display !== 'none') {
-    return buildAppYamlFromForm();
+  try {
+    const formTab = document.getElementById('add-app-form-tab');
+    return formTab.style.display !== 'none'
+      ? buildAppYamlFromForm()
+      : document.getElementById('app-yaml').value.trim();
+  } catch (error) {
+    showAddMsg(error.message, 'error');
+    return '';
   }
-  return document.getElementById('app-yaml').value.trim();
 }
 
 async function validateAppYAML() {
