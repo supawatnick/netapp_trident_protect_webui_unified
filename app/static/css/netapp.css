@@ -8,7 +8,7 @@
   --color-surface: #f7f7f7;
   --color-border: #e5e5e5;
   --color-success: #008000;
-  --color-error: #cc0000;
+  --color-error: #800020; /* Burgundy for errors and unavailable states */
   --color-warning: #b8860b;
   --color-info: #0066cc;
 
