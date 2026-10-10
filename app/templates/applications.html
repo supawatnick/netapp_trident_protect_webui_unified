@@ -112,7 +112,12 @@
   <div class="modal" style="max-width:800px;max-height:90vh;overflow-y:auto;" onclick="event.stopPropagation()">
     <div class="between">
       <h3>Application: <span id="va-name">—</span></h3>
-      <button class="btn secondary small" onclick="hideViewAppModal()">Close</button>
+      <div class="form-row">
+        {% if tp_user and tp_user.role == 'admin' %}
+        <button class="btn small" onclick="editApplicationYAML()">Edit YAML</button>
+        {% endif %}
+        <button class="btn secondary small" onclick="hideViewAppModal()">Close</button>
+      </div>
     </div>
 
     <h4 style="margin-top:16px;">Metadata</h4>
@@ -387,6 +392,7 @@ function parseAppYamlToForm(yamlStr) {
 }
 
 async function showAddAppModal() {
+  document.querySelector('#add-app-modal h3').textContent = 'Add Application';
   document.getElementById('add-app-msg').textContent = '';
   document.getElementById('add-app-msg').style.color = '';
   document.getElementById('add-app-name').value = '';
@@ -469,7 +475,7 @@ async function viewApplication(ns, name) {
       fetch(`/api/application/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`),
       fetch(`/api/application/${encodeURIComponent(ns)}/${encodeURIComponent(name)}?format=yaml`),
     ]);
-    if (!jsonRes.ok) throw new Error(`HTTP ${jsonRes.status}`);
+    if (!jsonRes.ok || !yamlRes.ok) throw new Error(`HTTP ${!jsonRes.ok ? jsonRes.status : yamlRes.status}`);
     const app = await jsonRes.json();
     const yamlText = await yamlRes.text();
     renderViewAppModal(app, yamlText);
@@ -526,6 +532,20 @@ async function loadApplicationProtectionOverview(ns, name) {
     message.style.color = 'var(--color-error)';
     message.textContent = 'Partial discovery failure — ' + failures.join('; ');
   }
+}
+
+async function editApplicationYAML() {
+  if (!tpRequireAdmin()) return;
+  const name = document.getElementById('va-name').textContent;
+  const ns = document.getElementById('va-namespace').textContent;
+  const yamlText = document.getElementById('va-yaml').textContent;
+  hideViewAppModal();
+  await showAddAppModal();
+  document.getElementById('add-app-name').value = name;
+  document.getElementById('add-app-ns').value = ns;
+  switchAppTab('yaml');
+  document.getElementById('app-yaml').value = yamlText;
+  document.querySelector('#add-app-modal h3').textContent = 'Edit Application YAML';
 }
 
 function renderViewAppModal(app, yamlText) {
