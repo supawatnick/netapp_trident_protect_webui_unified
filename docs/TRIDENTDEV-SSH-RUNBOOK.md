@@ -84,6 +84,17 @@ Known next review items:
 
 **Status of Phase 3 changes:** No new Phase 3 code was deployed or committed as part of the SSH investigation on 2026-10-10. Do not mistake the investigation for a completed implementation.
 
+## Development workspace on ntap_office (2026-10-10)
+
+- Verified clone: `/root/src/netapp_trident_protect_webui_unified` on `ntap_office`
+- Checked out branch: `feature/phase3-application-management`
+- Git working tree was clean immediately after clone; unit tests 10/10 and Python compileall passed
+- Local JavaScript syntax checks could not run because `node` is not installed. GitHub CI passed previously.
+- Runtime integration host remains `10.10.110.75`; no deployment occurred as part of this move
+- `netapp_trident_webui_unified` was not present under `/root/src`; no old directory was deleted
+- Workspace registration for the nested clone failed with internal error; existing `/root/src` workspace can inspect/edit it
+- A runbook edit exists in the local clone; local commit was blocked by unconfigured Git author identity. Confirm local Git status before syncing.
+
 ## Additional continuity
 
 An orchestration-side reference file was created at `/root/src/docs/TRIDENTDEV-SSH-RUNBOOK.md`, but **this repository copy is the canonical handoff** for future chats.
