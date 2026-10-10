@@ -30,3 +30,5 @@ jobs:
           node-version: '22'
       - name: Check shared frontend JavaScript syntax
         run: node --check app/static/js/app.js
+      - name: Check Applications template JavaScript syntax
+        run: python tests/check_applications_js.py
