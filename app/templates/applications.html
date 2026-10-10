@@ -137,6 +137,22 @@
       </tbody>
     </table>
 
+    <h4 style="margin-top:16px;">Protection Overview</h4>
+    <p class="text-muted">Resources are matched to this Application in the active cluster.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Resource</th><th>Name</th><th>Status</th><th>AppVault</th></tr></thead>
+        <tbody id="va-protection-resources"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <p id="va-protection-load-errors" class="text-muted"></p>
+    <div class="form-row">
+      <a class="btn small secondary" href="/snapshots">Manage Snapshots</a>
+      <a class="btn small secondary" href="/backups">Manage Backups</a>
+      <a class="btn small secondary" href="/schedules">Manage Schedules</a>
+      <a class="btn small secondary" href="/settings/appvaults">Manage AppVaults</a>
+    </div>
+
     <h4 style="margin-top:16px;">Spec</h4>
     <table>
       <tbody>
@@ -458,8 +474,57 @@ async function viewApplication(ns, name) {
     const yamlText = await yamlRes.text();
     renderViewAppModal(app, yamlText);
     document.getElementById('view-app-modal').style.display = 'flex';
+    loadApplicationProtectionOverview(ns, name);
   } catch (e) {
     toast('Failed to load: ' + e.message, 'error');
+  }
+}
+
+async function loadApplicationProtectionOverview(ns, name) {
+  const body = document.getElementById('va-protection-resources');
+  const message = document.getElementById('va-protection-load-errors');
+  body.replaceChildren();
+  message.textContent = '';
+  const resources = [
+    ['Snapshot', '/api/snapshots'],
+    ['Backup', '/api/backups'],
+    ['Schedule', '/api/schedules'],
+  ];
+  const failures = [];
+  for (const [type, url] of resources) {
+    try {
+      const response = await fetch(url, {cache: 'no-store'});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if (!Array.isArray(payload.items)) throw new Error('Malformed response');
+      for (const entry of payload.items) {
+        if (entry.namespace !== ns || entry.applicationRef !== name) continue;
+        const row = body.insertRow();
+        const values = [type, entry.name || '—', entry.state ||
+          (entry.enabled === true ? 'Enabled' : entry.enabled === false ? 'Disabled' : 'Unknown'),
+          entry.appVaultRef || '—'];
+        values.forEach((value, idx) => {
+          const cell = row.insertCell();
+          if (idx === 2) {
+            cell.innerHTML = stateBadge(value);
+          } else {
+            cell.textContent = value;
+          }
+        });
+      }
+    } catch (error) {
+      failures.push(type + ': ' + error.message);
+    }
+  }
+  if (!body.rows.length) {
+    const cell = body.insertRow().insertCell();
+    cell.colSpan = 4;
+    cell.className = 'empty';
+    cell.textContent = failures.length ? 'Unable to load protection resources' : 'No protection resources yet';
+  }
+  if (failures.length) {
+    message.style.color = 'var(--color-error)';
+    message.textContent = 'Partial discovery failure — ' + failures.join('; ');
   }
 }
 
@@ -480,7 +545,7 @@ function renderViewAppModal(app, yamlText) {
     : '—';
 
   document.getElementById('va-protection').innerHTML = stateBadge(st.protectionState);
-  document.getElementById('va-health').textContent = st.protectionHealthState || '—';
+  document.getElementById('va-health').innerHTML = stateBadge(st.protectionHealthState || 'Unknown');
   document.getElementById('va-resources').textContent = st.resourceCount != null ? st.resourceCount : '—';
   document.getElementById('va-storage').textContent = st.storageCapacityBytes != null ? formatBytes(st.storageCapacityBytes) : '—';
   document.getElementById('va-storage-used').textContent = st.storageUsedCapacityBytes != null ? formatBytes(st.storageUsedCapacityBytes) : '—';
