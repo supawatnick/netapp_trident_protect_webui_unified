@@ -26,14 +26,14 @@ async function tpFetch(url, opts) {
 }
 
 function stateBadge(state) {
-  const s = (state || 'Unknown').toLowerCase();
-  if (s === 'protected') return '<span class="badge protected">PROTECTED</span>';
-  if (s === 'partial') return '<span class="badge partial">PARTIAL</span>';
-  if (s === 'none' || s === 'not protected' || s === 'unprotected') return '<span class="badge none">NONE</span>';
-  if (s === 'completed' || s === 'success') return '<span class="badge success">COMPLETED</span>';
-  if (s === 'failed' || s === 'error') return '<span class="badge error">FAILED</span>';
-  if (s === 'running' || s === 'inprogress' || s === 'pending' || s === '') return '<span class="badge pending">RUNNING</span>';
-  return `<span class="badge info">${state}</span>`;
+  const label = String(state == null ? 'Unknown' : state);
+  const s = label.toLowerCase().trim();
+  let kind = 'pending';
+  if (['protected', 'completed', 'success', 'healthy', 'available', 'ready', 'true'].includes(s)) kind = 'success';
+  else if (['failed', 'error', 'unavailable', 'unhealthy', 'degraded', 'false', 'notready'].includes(s)) kind = 'error';
+  else if (s === 'partial') kind = 'warning';
+  else if (['running', 'inprogress', 'pending', 'unknown', '', 'none', 'not protected', 'unprotected'].includes(s)) kind = 'pending';
+  return '<span class="badge ' + kind + '">' + escapeHtml(label) + '</span>';
 }
 
 function toast(message, kind) {

@@ -324,8 +324,12 @@ def register_routes(app: Flask) -> None:
     @app.route("/api/applications")
     def api_applications():
         ns = request.args.get("namespace") or None
-        items = trident_protect.list_applications(ns)
-        return jsonify({"items": items, "total": len(items)})
+        try:
+            items = trident_protect.list_applications(ns)
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            log.exception("Unable to list Trident Protect Applications")
+            return jsonify({"ok": False, "error": str(exc)}), 503
+        return jsonify({"ok": True, "items": items, "total": len(items)})
 
     @app.route("/api/backups")
     def api_backups():

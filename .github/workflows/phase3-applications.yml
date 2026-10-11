@@ -1,0 +1,34 @@
+name: Phase 3 Application checks
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - '.github/workflows/phase3-applications.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install validation dependency
+        run: python -m pip install 'PyYAML==6.0.3'
+      - name: Compile backend Python
+        run: python -m compileall -q app tests
+      - name: Application CR regression tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check shared frontend JavaScript syntax
+        run: node --check app/static/js/app.js
+      - name: Check Applications template JavaScript syntax
+        run: python tests/check_applications_js.py

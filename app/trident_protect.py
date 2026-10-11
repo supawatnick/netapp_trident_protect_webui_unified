@@ -673,10 +673,21 @@ def list_namespaces() -> list[dict]:
 
 
 def list_applications(namespace: str | None = None, context: str | None = None) -> list[dict]:
-    items = [serialize_application(a) for a in _list("application", namespace or "", context=context)]
-    if namespace:
-        items = [i for i in items if i.get("namespace") == namespace]
-    return items
+    """List applications; never silently convert cluster failures into empty lists."""
+    args = ["get", "application", "-o", "json"]
+    args += ["-n", namespace] if namespace else ["-A"]
+    rc, out, err = _run(args, context=context)
+    if rc != 0:
+        log.error("Application discovery failed: %s", (err or out).strip())
+        raise RuntimeError("Could not query Applications from the selected cluster")
+    try:
+        decoded = json.loads(out)
+        if not isinstance(decoded, dict) or not isinstance(decoded.get("items"), list):
+            raise ValueError("Malformed Application list response")
+    except (ValueError, TypeError) as exc:
+        log.error("Invalid Application list response: %s", exc)
+        raise RuntimeError("Invalid Applications response from the selected cluster") from exc
+    return [serialize_application(a) for a in decoded["items"]]
 
 
 def list_backups(namespace: str | None = None, context: str | None = None) -> list[dict]:
@@ -774,35 +785,17 @@ def list_appvaults(namespace: str = "", context: str | None = None) -> list[dict
 import yaml as _yaml
 
 def validate_application_yaml(yaml_str: str) -> tuple[bool, str]:
-    """Parse + validate Application YAML without applying."""
+    """Validate Application manifests without mutating Kubernetes resources."""
+    from .application_validation import validate_application_manifest
     try:
-        doc = _yaml.safe_load(yaml_str)
-    except _yaml.YAMLError as e:
-        return False, f"YAML syntax error: {e}"
-    if not isinstance(doc, dict):
-        return False, "YAML must be a single document (mapping)"
-
-    kind = doc.get("kind")
-    if kind != "Application":
-        return False, f"kind must be 'Application' (got '{kind}')"
-
-    api_version = doc.get("apiVersion", "")
-    if not api_version.startswith("protect.trident.netapp.io"):
-        return False, f"apiVersion must start with 'protect.trident.netapp.io' (got '{api_version}')"
-
-    metadata = doc.get("metadata", {}) or {}
-    name = metadata.get("name")
-    ns = metadata.get("namespace")
-    if not name:
-        return False, "metadata.name required"
-    if not ns:
-        return False, "metadata.namespace required"
-
-    spec = doc.get("spec", {}) or {}
-    if not spec.get("includedNamespaces"):
-        return False, "spec.includedNamespaces required (list of namespace selectors)"
-
-    return True, f"Valid — will create Application '{name}' in namespace '{ns}'"
+        doc = validate_application_manifest(yaml_str)
+    except ValueError as exc:
+        return False, str(exc)
+    metadata = doc["metadata"]
+    return True, (
+        f"Valid Application '{metadata['name']}' in namespace "
+        f"'{metadata['namespace']}'"
+    )
 
 
 def apply_application_yaml(yaml_str: str) -> tuple[bool, str]:
@@ -931,45 +924,24 @@ def get_snapshotrestore(namespace: str, name: str) -> dict | None:
 
 
 def serialize_app_to_yaml(app: dict) -> str:
-    """Convert Application CR dict to valid YAML string.
+    """Emit a declarative Application manifest safe to edit and re-apply.
 
-    Removes noisy metadata (managedFields, annotations) and dumps
-    with PyYAML so the output can be copied directly into `oc apply -f`.
-    Adds apiVersion/kind if missing (CLI output omits them).
+    Preserve metadata labels, user annotations and the Trident Protect spec.
+    Exclude runtime metadata, finalizers and controller-owned status.
     """
-    clean = {**app}
-    # Ensure apiVersion and kind are present (CLI output may omit them)
-    if "apiVersion" not in clean:
-        clean["apiVersion"] = "protect.trident.netapp.io/v1"
-    if "kind" not in clean:
-        clean["kind"] = "Application"
-    # Move apiVersion/kind to top for canonical order
-    ordered = {
-        "apiVersion": clean.pop("apiVersion"),
-        "kind": clean.pop("kind"),
-        "metadata": {},
-        "spec": {},
-        "status": {},
+    md = app.get("metadata") or {}
+    allowed_metadata = {
+        key: md[key] for key in ("name", "namespace", "labels", "annotations")
+        if key in md
     }
-    if isinstance(clean.get("metadata"), dict):
-        ordered["metadata"] = {
-            k: v for k, v in clean["metadata"].items()
-            if k not in ("managedFields", "annotations")
-        }
-        del clean["metadata"]
-    ordered["spec"] = clean.pop("spec", {})
-    ordered["status"] = clean.pop("status", {})
-    # Re-insert any extra top-level keys (shouldn't be any, but be safe)
-    for k, v in clean.items():
-        ordered[k] = v
-    return _yaml.dump(
-        ordered,
-        default_flow_style=False,
-        sort_keys=False,
-        indent=2,
-        allow_unicode=True,
-        width=4096,
-    )
+    output = {
+        "apiVersion": "protect.trident.netapp.io/v1",
+        "kind": "Application",
+        "metadata": allowed_metadata,
+        "spec": app.get("spec") or {},
+    }
+    return _yaml.safe_dump(output, default_flow_style=False, sort_keys=False,
+                           allow_unicode=True, width=4096)
 
 
 # --- Backup management ---
